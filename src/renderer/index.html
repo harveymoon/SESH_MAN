@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>seshMan</title>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="titlebar">
+      <span class="logo">&gt;_&lt;</span>
+      <span class="app-name">seshMan</span>
+      <input id="search" type="text" placeholder="search sessions…" spellcheck="false" />
+      <button id="grid-toggle" title="Toggle grid overview">⊞ grid</button>
+      <button id="queue-toggle" title="Prompt queue">queue</button>
+      <div class="winctrl-spacer"></div>
+    </div>
+
+    <div id="app">
+      <aside id="sidebar">
+        <header id="sidebar-header">
+          <div class="subtitle-row">
+            <span class="subtitle" id="session-count">scanning…</span>
+            <div class="hdr-controls">
+              <button id="archived-toggle" title="Show archived sessions">archived</button>
+              <select id="source-filter" title="Filter by session source">
+                <option value="both">both</option>
+                <option value="cli">cli</option>
+                <option value="desktop">desktop</option>
+              </select>
+            </div>
+          </div>
+        </header>
+        <div id="session-list"></div>
+        <footer id="sidebar-footer">
+          <button id="new-session">+ New session here…</button>
+        </footer>
+      </aside>
+
+      <main id="main">
+        <div id="pane-header" class="empty">
+          <div class="pane-titles">
+            <span id="pane-title"></span>
+            <span id="pane-sub"></span>
+          </div>
+          <span id="pane-close" title="Close session">×</span>
+        </div>
+        <div id="group-header" class="hidden">
+          <span id="group-header-name"></span>
+          <span class="group-header-actions">
+            <button id="group-end">end group chat</button>
+            <button id="group-close" title="Back to sessions">×</button>
+          </span>
+        </div>
+        <div id="terminals">
+          <div id="empty-state">
+            <div class="empty-glyph">&gt;_&lt;</div>
+            <p>Select a session on the left to attach a live terminal.</p>
+            <p class="hint">Green = idle · Amber = busy · Grey = not running</p>
+          </div>
+          <div id="group-history-pane">
+            <div class="gh-title">group history</div>
+            <div id="group-history-banner"></div>
+            <div id="group-history-log" class="log-scroll"></div>
+          </div>
+        </div>
+      </main>
+
+      <aside id="queue-pane" class="collapsed">
+        <header id="queue-header">
+          <span class="queue-title">Prompt Queue</span>
+          <button id="queue-add" title="Add a prompt">+ add</button>
+        </header>
+        <div id="queue-bookmarks">
+          <select id="bookmark-select" title="Insert a saved prompt">
+            <option value="">★ insert saved…</option>
+          </select>
+          <button id="bookmark-manage" title="Manage saved prompts">manage</button>
+        </div>
+        <div id="queue-target"></div>
+        <div id="queue-list"></div>
+      </aside>
+    </div>
+
+    <div id="grid-view"></div>
+
+    <div id="bookmark-modal" class="hidden">
+      <div class="bm-card">
+        <div class="bm-head">
+          <span>Saved Prompts</span>
+          <button id="bm-close" title="Close">×</button>
+        </div>
+        <div id="bm-list"></div>
+      </div>
+    </div>
+
+    <div id="group-modal" class="hidden"></div>
+
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

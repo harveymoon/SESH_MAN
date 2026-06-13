@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build / packaging output
+release/
+out/
+*.asar
+
+# Logs
+*.log
+seshman.log
+err.log
+out.log
+
+# Local Claude Code state (memory, plans, session data)
+.claude/
+
+# Local runtime data / secrets (never committed)
+api_token.txt
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
