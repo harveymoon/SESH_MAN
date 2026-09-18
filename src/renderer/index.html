@@ -120,6 +120,7 @@
       </aside>
 
       <aside id="queue-pane" class="collapsed">
+        <div id="queue-resize" title="Drag to resize"></div>
         <header id="queue-header">
           <span class="queue-title">Prompt Queue</span>
         </header>
@@ -191,6 +192,19 @@
           <button id="bm-close" title="Close">×</button>
         </div>
         <div id="bm-list"></div>
+      </div>
+    </div>
+
+    <div id="prompt-modal" class="hidden">
+      <div class="bm-card pm-card">
+        <div class="bm-head">
+          <span>Edit Prompt</span>
+          <span class="pm-actions">
+            <button id="pm-send" title="Send to the active session">send ▸</button>
+            <button id="pm-close" title="Close">×</button>
+          </span>
+        </div>
+        <textarea id="pm-text" spellcheck="false" placeholder="Write a prompt…"></textarea>
       </div>
     </div>
 

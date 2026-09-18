@@ -2168,6 +2168,15 @@ function buildQueueItem(sid, i, text, canSend, isDraft) {
     nameInput.select();
   });
 
+  const expand = document.createElement('button');
+  expand.className = 'q-expand';
+  expand.textContent = '⤢';
+  expand.title = 'Edit in a larger editor';
+  expand.addEventListener('click', () => {
+    if (item.classList.contains('draft')) return; // draft isn't in the array
+    openPromptModal(sid, i);
+  });
+
   const del = document.createElement('button');
   del.className = 'q-del';
   del.textContent = 'delete';
@@ -2190,6 +2199,7 @@ function buildQueueItem(sid, i, text, canSend, isDraft) {
       renderQueue();
     }
   });
+  actions.appendChild(expand);
   actions.appendChild(star);
   actions.appendChild(del);
   actions.appendChild(send);
@@ -2209,6 +2219,82 @@ if (localStorage.getItem('seshman.queueOpen') === '1') {
   queuePaneEl.classList.remove('collapsed');
   queueToggleEl.classList.add('active');
 }
+
+// ---- Queue pane: manual resize (drag the left edge; width persisted) ----
+const queueResizeEl = document.getElementById('queue-resize');
+const QUEUE_W_MIN = 220;
+const QUEUE_W_MAX = 640;
+function applyQueueWidth(w) {
+  queuePaneEl.style.width = w + 'px';
+  queuePaneEl.style.minWidth = w + 'px';
+}
+let queueDrag = null;
+queueResizeEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  queueDrag = { startX: e.clientX, startW: queuePaneEl.getBoundingClientRect().width };
+  document.body.classList.add('resizing');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!queueDrag) return;
+  applyQueueWidth(Math.max(QUEUE_W_MIN, Math.min(QUEUE_W_MAX, queueDrag.startW + (queueDrag.startX - e.clientX))));
+  if (activePtyId != null) requestAnimationFrame(() => fitActive(activePtyId)); // live refit
+});
+window.addEventListener('mouseup', () => {
+  if (!queueDrag) return;
+  queueDrag = null;
+  document.body.classList.remove('resizing');
+  localStorage.setItem('seshman.queueWidth', String(Math.round(queuePaneEl.getBoundingClientRect().width)));
+  if (activePtyId != null) fitActive(activePtyId);
+});
+{
+  const qw = parseInt(localStorage.getItem('seshman.queueWidth') || '', 10);
+  if (qw >= QUEUE_W_MIN && qw <= QUEUE_W_MAX) applyQueueWidth(qw);
+}
+
+// ---- Prompt editor modal (⤢ on a queue item -> big textarea) ----
+const promptModalEl = document.getElementById('prompt-modal');
+const pmTextEl = document.getElementById('pm-text');
+const pmSendEl = document.getElementById('pm-send');
+const pmCloseEl = document.getElementById('pm-close');
+let pmTarget = null; // { sid, i } of the queue item being edited
+
+function openPromptModal(sid, i) {
+  if (!queues[sid] || queues[sid][i] == null) return;
+  pmTarget = { sid, i };
+  pmTextEl.value = queues[sid][i];
+  pmSendEl.disabled = !activeTermEntry();
+  promptModalEl.classList.remove('hidden');
+  pmTextEl.focus();
+}
+function closePromptModal() {
+  if (promptModalEl.classList.contains('hidden')) return;
+  promptModalEl.classList.add('hidden');
+  pmTarget = null;
+  renderQueue(); // resync the small textarea with edits made here
+}
+pmTextEl.addEventListener('input', () => {
+  // Live-save into the queue (same persistence path as the inline editor).
+  if (pmTarget && queues[pmTarget.sid] && queues[pmTarget.sid][pmTarget.i] != null) {
+    queues[pmTarget.sid][pmTarget.i] = pmTextEl.value;
+    saveQueues();
+  }
+});
+pmTextEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closePromptModal();
+});
+pmSendEl.addEventListener('click', () => {
+  if (!pmTarget) return;
+  const { sid, i } = pmTarget;
+  if (sendPrompt(pmTextEl.value)) {
+    if (queues[sid] && queues[sid][i] != null) queues[sid].splice(i, 1);
+    saveQueues();
+    closePromptModal();
+  }
+});
+pmCloseEl.addEventListener('click', closePromptModal);
+promptModalEl.addEventListener('click', (e) => {
+  if (e.target === promptModalEl) closePromptModal();
+});
 
 // ---------- Insight pane ----------
 // The transcript layers the terminal hides, for the ACTIVE session: latest
