@@ -32,9 +32,41 @@ function ensureToken(file) {
   return t;
 }
 
-// opts: { port, tokenFile, version, getSnapshot(), onFocus(id), log(msg) }
+// Read a JSON request body (bounded), calling cb(obj) — or cb(null) on bad/oversized input.
+function readJsonBody(req, cb) {
+  let data = '';
+  let aborted = false;
+  req.on('data', (c) => {
+    data += c;
+    if (data.length > 1e6) {
+      aborted = true;
+      req.destroy();
+    }
+  });
+  req.on('end', () => {
+    if (aborted) return cb(null);
+    try {
+      cb(data ? JSON.parse(data) : {});
+    } catch (_) {
+      cb(null);
+    }
+  });
+  req.on('error', () => cb(null));
+}
+
+// opts: { port, tokenFile, version, getSnapshot(), getBookmarks(), onFocus(id),
+//         onPrompt(id, body) -> Promise<{status, body}>, log(msg) }
 function start(opts) {
-  const { port = 7374, tokenFile, version = '0', getSnapshot, onFocus, log = () => {} } = opts;
+  const {
+    port = 7374,
+    tokenFile,
+    version = '0',
+    getSnapshot,
+    getBookmarks,
+    onFocus,
+    onPrompt,
+    log = () => {},
+  } = opts;
   const token = ensureToken(tokenFile);
 
   const server = http.createServer((req, res) => {
@@ -50,7 +82,7 @@ function start(opts) {
 
     // status — no auth (availability probe)
     if (req.method === 'GET' && url.pathname === '/api/status') {
-      return json(200, { ok: true, version, features: ['sessions', 'switch'] });
+      return json(200, { ok: true, version, features: ['sessions', 'switch', 'prompt', 'bookmarks'] });
     }
 
     // Everything else gates on the token via the Authorization: Bearer header
@@ -71,6 +103,11 @@ function start(opts) {
       return json(200, { items, current: snap.current });
     }
 
+    // saved prompts (so a controller can render seshMan bookmarks as buttons)
+    if (req.method === 'GET' && url.pathname === '/api/bookmarks') {
+      return json(200, (getBookmarks && getBookmarks()) || { items: [] });
+    }
+
     const m = url.pathname.match(/^\/api\/sessions\/([^/]+)\/focus$/);
     if (req.method === 'POST' && m) {
       const id = decodeURIComponent(m[1]);
@@ -81,6 +118,31 @@ function start(opts) {
       }
       res.writeHead(204);
       return res.end();
+    }
+
+    // inject a prompt (literal text or a bookmark_id) into a hosted session
+    const pm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/);
+    if (req.method === 'POST' && pm) {
+      const id = decodeURIComponent(pm[1]);
+      if (!onPrompt) return json(501, { error: 'unsupported', message: 'prompt not available' });
+      readJsonBody(req, (body) => {
+        if (body === null) return json(400, { error: 'bad_body', message: 'invalid JSON body' });
+        Promise.resolve(onPrompt(id, body))
+          .then((r) => {
+            const status = (r && r.status) || 204;
+            if (status === 204) {
+              res.writeHead(204);
+              return res.end();
+            }
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify((r && r.body) || {}));
+          })
+          .catch((e) => {
+            log('onPrompt failed: ' + e.message);
+            json(500, { error: 'prompt_failed', message: 'internal error' });
+          });
+      });
+      return;
     }
 
     json(404, { error: 'not_found', message: 'unknown endpoint' });

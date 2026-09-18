@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, Menu, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, clipboard, crashReporter } = require('electron');
 const { SessionWatcher, findTranscript, readTranscriptMessages } = require('./sessionWatcher');
 const { PtyManager } = require('./ptyManager');
 const apiServer = require('./apiServer');
@@ -36,7 +36,31 @@ function closeAllTranscriptWatchers() {
 
 // Latest deck snapshot pushed from the renderer; served over the local API.
 let deckSnapshot = { items: [], current: null };
+// Latest saved-prompt list pushed from the renderer; served at /api/bookmarks.
+let deckBookmarks = { items: [] };
 let api = null;
+
+// Deck → renderer prompt-injection round-trip. The HTTP request arrives in main
+// but only the renderer can act (it owns the PTYs + bracketed paste), so we
+// forward the request and await its reply, keyed by a request id.
+const pendingPrompts = new Map();
+let promptSeq = 1;
+function requestPrompt(id, body) {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return resolve({ status: 503, body: { error: 'no_window', message: 'seshMan window not available' } });
+    }
+    const reqId = promptSeq++;
+    const timer = setTimeout(() => {
+      if (pendingPrompts.has(reqId)) {
+        pendingPrompts.delete(reqId);
+        resolve({ status: 504, body: { error: 'timeout', message: 'renderer did not respond' } });
+      }
+    }, 5000);
+    pendingPrompts.set(reqId, { resolve, timer });
+    mainWindow.webContents.send('deck:prompt', { reqId, id, body });
+  });
+}
 
 // ---- Crash / error logging ----
 // Write to userData (always writable) — NOT next to main.js, which is inside the
@@ -57,7 +81,28 @@ function logLine(s) {
 }
 process.on('uncaughtException', (e) => logLine('MAIN uncaughtException: ' + ((e && e.stack) || e)));
 process.on('unhandledRejection', (e) => logLine('MAIN unhandledRejection: ' + ((e && e.stack) || e)));
-logLine('--- app start ---');
+logLine('--- app start --- v' + app.getVersion() + ' electron ' + process.versions.electron);
+
+// Crash auditing: start Crashpad so a renderer/GPU crash leaves a local minidump
+// we can actually inspect (a bare renderer crash logs no Windows event and no
+// dump otherwise). Keep it LOCAL — never upload. Must start as early as possible.
+try {
+  crashReporter.start({
+    productName: 'seshMan',
+    companyName: 'seshMan',
+    uploadToServer: false,
+    compress: true,
+  });
+  // crashDumps path is resolvable once the reporter is up; record it so we know
+  // where to look next time.
+  try {
+    logLine('crash dumps -> ' + path.join(app.getPath('crashDumps'), 'reports'));
+  } catch (_) {
+    /* path not ready yet */
+  }
+} catch (e) {
+  logLine('crashReporter start failed: ' + e);
+}
 
 // This machine shows GPU driver instability (WER LiveKernelEvent 141/193 video
 // TDRs + bugchecks), which kills Electron's GPU process and takes the window
@@ -69,6 +114,7 @@ app.on('child-process-gone', (_e, details) => logLine('CHILD gone: ' + JSON.stri
 app.on('gpu-process-crashed', (_e, killed) => logLine('GPU crashed killed=' + killed));
 
 let mainWindow = null;
+let rendererCrashes = []; // timestamps of recent renderer crashes (reload-loop guard)
 const watcher = new SessionWatcher({ pollMs: 1500 });
 const ptys = new PtyManager();
 
@@ -107,11 +153,30 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
-  // Capture renderer crashes and console errors.
-  mainWindow.webContents.on('render-process-gone', (_e, details) =>
-    logLine('RENDERER gone: ' + JSON.stringify(details))
-  );
+  // Capture renderer crashes and console errors. On a real crash, reload the
+  // window so the UI self-heals instead of leaving a dead app — but bail out if
+  // it's crash-looping (would otherwise reload forever).
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    logLine('RENDERER gone: ' + JSON.stringify(details));
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const reason = details && details.reason;
+    if (reason === 'clean-exit' || reason === 'killed') return; // normal teardown
+    const now = Date.now();
+    rendererCrashes = rendererCrashes.filter((t) => now - t < 60000);
+    rendererCrashes.push(now);
+    if (rendererCrashes.length > 3) {
+      logLine('RENDERER crash loop (' + rendererCrashes.length + ' in 60s) — not reloading');
+      return;
+    }
+    logLine('RENDERER auto-reloading after crash (#' + rendererCrashes.length + ' this minute)');
+    try {
+      mainWindow.webContents.reload();
+    } catch (e) {
+      logLine('reload failed: ' + e);
+    }
+  });
   mainWindow.webContents.on('unresponsive', () => logLine('RENDERER unresponsive'));
+  mainWindow.webContents.on('responsive', () => logLine('RENDERER responsive again'));
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
     if (level >= 2) logLine('RENDERER console: ' + message + '  @' + sourceId + ':' + line);
   });
@@ -126,6 +191,8 @@ function createWindow() {
       tokenFile: path.join(app.getPath('userData'), 'api_token.txt'),
       version: app.getVersion(),
       getSnapshot: () => deckSnapshot,
+      getBookmarks: () => deckBookmarks,
+      onPrompt: (id, body) => requestPrompt(id, body),
       onFocus: (id) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         mainWindow.webContents.send('deck:focus', id);
@@ -158,6 +225,18 @@ ipcMain.handle('groupHistory:fetch', (_evt, { group, limit }) =>
 // Renderer pushes the computed deck view; the local API serves it verbatim.
 ipcMain.on('deck:publish', (_evt, snapshot) => {
   if (snapshot && Array.isArray(snapshot.items)) deckSnapshot = snapshot;
+});
+// Renderer pushes its saved-prompt list; served at GET /api/bookmarks.
+ipcMain.on('deck:bookmarks', (_evt, items) => {
+  deckBookmarks = { items: Array.isArray(items) ? items : [] };
+});
+// Renderer's reply to a forwarded prompt-injection request.
+ipcMain.on('deck:prompt-result', (_evt, { reqId, status, body }) => {
+  const p = pendingPrompts.get(reqId);
+  if (!p) return;
+  clearTimeout(p.timer);
+  pendingPrompts.delete(reqId);
+  p.resolve({ status, body });
 });
 // Clipboard — done in main because the sandboxed renderer/preload can't access
 // the clipboard module. Sync read so callers can insert at the cursor inline.

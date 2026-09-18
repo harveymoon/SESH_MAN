@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
   // Deck API bridge: publish the computed view, receive focus commands
   deckPublish: (snapshot) => ipcRenderer.send('deck:publish', snapshot),
   onDeckFocus: (cb) => ipcRenderer.on('deck:focus', (_evt, id) => cb(id)),
+  // Publish saved prompts for GET /api/bookmarks.
+  publishBookmarks: (items) => ipcRenderer.send('deck:bookmarks', items),
+  // Deck-driven prompt injection: main forwards a request, renderer replies.
+  onDeckPrompt: (cb) => ipcRenderer.on('deck:prompt', (_evt, payload) => cb(payload)),
+  deckPromptResult: (reqId, status, body) =>
+    ipcRenderer.send('deck:prompt-result', { reqId, status, body }),
 
   // Folder picker for a new session
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),

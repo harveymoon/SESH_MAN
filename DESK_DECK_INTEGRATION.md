@@ -46,7 +46,7 @@ There is no pairing UI and no human ever sees the token — read the file.
 The first call a controller makes; decides whether to render anything.
 
 ```json
-{ "ok": true, "version": "0.1.0", "features": ["sessions", "switch"] }
+{ "ok": true, "version": "0.1.0", "features": ["sessions", "switch", "prompt", "bookmarks"] }
 ```
 
 Check `features` to hide UI an older seshMan build doesn't support. Never 500s.
@@ -69,9 +69,12 @@ GET /api/sessions?all=1    # every session, incl. stopped
       "id": "69969994-c7d3-4f3e-91eb-ef57a467bedd",
       "name": "winri",
       "project": "winri",
+      "cwd": "C:\\CODE\\winri",
       "state": "ready",
       "running": true,
+      "hosted": true,
       "waiting": true,
+      "attention": "waiting",
       "source": "cli",
       "lastActive": 1780190000000
     }
@@ -82,12 +85,15 @@ GET /api/sessions?all=1    # every session, incl. stopped
 
 | Field | Meaning |
 |-------|---------|
-| `id` | opaque session id — echo it back in `focus` |
+| `id` | opaque session id — echo it back in `focus` / `prompt` |
 | `name` | the session's display title (your `/rename`, else auto-title, else folder) |
 | `project` | the project folder name |
+| `cwd` | full working-directory path (disambiguates same-named projects) |
 | `state` | `working` · `ready` · `idle` · `shell` · `stopped` (see below) |
 | `running` | is a live process backing it |
+| `hosted` | seshMan owns a live PTY for it → **prompt injection is possible** (see `/prompt`). Enable the prompt button only when `hosted == true`. |
 | `waiting` | `true` = finished its turn, **your move** (badge these) |
+| `attention` | `none` · `waiting` (finished turn) · `question` (blocking on a prompt — most urgent). `error` reserved. Prefer this over deriving from `waiting`. |
 | `source` | `cli` or `desktop` (which kind of Claude session) |
 | `lastActive` | epoch ms of last activity (sort key) |
 | `current` (top-level) | the session currently focused in seshMan |
@@ -113,6 +119,41 @@ read-only log (and offer resume) — it never silently forks a live session.
 
 - Body: none.
 - Returns `204 No Content`.
+
+### `GET /api/bookmarks` — saved prompts (auth)
+
+seshMan's reusable saved prompts, so a controller can render them as buttons.
+
+```json
+{ "items": [ { "id": "bm_abc123", "name": "Run tests", "text": "npm test" } ] }
+```
+
+Fire one with `/prompt` below using its `id` as `bookmark_id` (recommended — stays
+in sync if the user edits it), or send its `text` literally.
+
+### `POST /api/sessions/<id>/prompt` — inject a prompt (auth)
+
+Type a prompt into a session seshMan **hosts** (owns a live PTY for). Use this for
+deck buttons / canned prompts.
+
+- Body: `{ "text"?: string, "bookmark_id"?: string, "submit"?: bool, "source"?: string }`
+  - `bookmark_id` (if valid) resolves to that bookmark's **current** text and takes
+    precedence over `text`. `submit` (default `false`): `false` inserts at the
+    cursor (no Enter, user confirms); `true` pastes **and** submits. `source` is a
+    free-form origin tag, logged only.
+- Responses:
+  - `204` — accepted (injected).
+  - `409 not_hosted` — session isn't hosted in seshMan (stopped / external). Open &
+    resume it first; seshMan never auto-resumes (resume forks a new id).
+  - `409 busy` — `submit:true` while the session is working; retry when it's ready.
+  - `404 unknown_bookmark` — `bookmark_id` doesn't exist.
+  - `429 too_soon` — another prompt hit the same session within 750 ms (debounce).
+  - `400 bad_body` / `empty` — bad JSON, or neither `text` nor `bookmark_id`.
+
+> **Hosted-only:** seshMan can only type into its own PTYs. Gate the prompt button
+> on `hosted == true`. It cannot detect you typing into a pane by hand, so a deck
+> prompt fired mid-typing will clobber partial input — use a per-session deck lock
+> if you chain prompts.
 
 ---
 
@@ -200,12 +241,13 @@ one whose `id == current`, dot the `waiting` ones; on tap call `focus(id)`.
 
 ---
 
-## Not yet (easy to add if needed)
+## Not yet (agreed, pending a later pass)
 
-- **`WS /events`** for push instead of polling — only worth it if you want
-  sub-second state; seshMan changes at human pace, so polling is fine.
-- **`POST /api/sessions/<id>/prompt`** — fire a text/bookmarked prompt into a
-  session from the deck. Say the word.
+- **`GET /api/events`** (SSE) for push instead of polling — full snapshot per
+  change + 15 s heartbeat, so `attention` transitions land immediately. Agreed
+  with Desk_Deck; not yet built.
+- **`last_message_preview`** field (~80 chars) on session items, behind a global
+  opt-in seshMan setting (default off, privacy). Agreed; not yet built.
 
 ---
 
