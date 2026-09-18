@@ -1674,6 +1674,13 @@ function paintPaneHeader() {
   paneHeaderEl.classList.remove('empty');
   paneTitleEl.textContent = entry.label + (entry.isLog ? '  (log)' : '');
   paneSubEl.textContent = entry.title || '';
+  // Honest close label: a log view just closes; a live terminal ENDS the session.
+  paneCloseEl.textContent = entry.isLog ? 'Close View' : entry.exited ? 'Close' : 'End Session';
+  paneCloseEl.title = entry.isLog
+    ? 'Close this read-only view'
+    : entry.exited
+      ? 'Close this ended terminal'
+      : 'End this session and close its terminal';
   const model = prettyModel(entry.model);
   paneModelEl.textContent = model;
   paneModelEl.title = entry.model || ''; // raw id on hover

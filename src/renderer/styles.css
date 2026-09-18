@@ -452,13 +452,19 @@ body { display: flex; flex-direction: column; }
 }
 #pane-close {
   flex: 0 0 auto;
-  color: var(--faint);
-  font-size: 18px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-2);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   line-height: 1;
   cursor: pointer;
   padding: 4px 6px;
 }
-#pane-close:hover { color: var(--danger); }
+#pane-close { cursor: pointer; padding: 5px 10px; }
+#pane-close:hover { color: var(--danger); border-color: var(--danger); }
 #pane-header.empty { display: none; }
 
 #terminals { flex: 1; position: relative; background: var(--bg); }
