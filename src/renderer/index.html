@@ -56,25 +56,9 @@
                 <option value="desktop">desktop</option>
               </select>
             </div>
-            <div id="view-menu-wrap">
-              <button id="view-toggle" title="Show / hide sessions" aria-label="Show / hide sessions">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </button>
-              <div id="view-menu" class="hidden">
-                <label class="vm-item">
-                  <input type="checkbox" id="vm-hide-inactive" />
-                  <span>Hide inactive sessions</span>
-                </label>
-                <label class="vm-item">
-                  <input type="checkbox" id="vm-hide-archived" />
-                  <span>Hide archived</span>
-                  <span id="vm-archived-count" class="vm-count"></span>
-                </label>
-              </div>
+            <div class="hdr-filters">
+              <button id="filter-live" title="Show only running sessions">live</button>
+              <button id="filter-arch" title="Show archived sessions">arch</button>
             </div>
           </div>
         </header>

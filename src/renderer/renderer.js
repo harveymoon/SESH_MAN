@@ -6,11 +6,8 @@ const sessionListEl = document.getElementById('session-list');
 const sessionCountEl = document.getElementById('session-count');
 const sourceFilterEl = document.getElementById('source-filter');
 const sortModeEl = document.getElementById('sort-mode');
-const viewToggleEl = document.getElementById('view-toggle');
-const viewMenuEl = document.getElementById('view-menu');
-const vmHideInactiveEl = document.getElementById('vm-hide-inactive');
-const vmHideArchivedEl = document.getElementById('vm-hide-archived');
-const vmArchivedCountEl = document.getElementById('vm-archived-count');
+const filterLiveEl = document.getElementById('filter-live');
+const filterArchEl = document.getElementById('filter-arch');
 const searchEl = document.getElementById('search');
 const searchClearEl = document.getElementById('search-clear');
 const gridToggleEl = document.getElementById('grid-toggle');
@@ -1823,40 +1820,29 @@ sortModeEl.addEventListener('change', () => {
   render();
 });
 
-// ---- Titlebar view (eye) dropdown: hide-inactive + hide-archived ----
+// ---- Sidebar filter buttons: live-only + show-archived ----
 function saveViewPrefs() {
   window.api.saveSettings({ hideInactive, showArchived });
 }
-// Sync the menu's checkboxes/labels + the eye's "active" highlight to state.
+// Sync the two toggle buttons to state. "live" pressed = only running
+// sessions; "arch" pressed = archived sessions are visible (with count).
 function refreshViewMenu() {
-  vmHideInactiveEl.checked = hideInactive;
-  vmHideArchivedEl.checked = !showArchived; // "hide archived" is the inverse of showArchived
-  vmArchivedCountEl.textContent = archived.size ? `(${archived.size})` : '';
-  // Highlight the eye when something non-default is being hidden.
-  const filtering = hideInactive || (archived.size > 0 && !showArchived);
-  viewToggleEl.classList.toggle('active', filtering);
+  filterLiveEl.classList.toggle('active', hideInactive);
+  filterArchEl.classList.toggle('active', showArchived);
+  filterArchEl.textContent = archived.size ? `arch ${archived.size}` : 'arch';
+  filterLiveEl.title = hideInactive ? 'Showing only running sessions — click to show all' : 'Show only running sessions';
+  filterArchEl.title = showArchived
+    ? 'Archived sessions are shown — click to hide'
+    : `Show ${archived.size || 'the'} archived session(s)`;
 }
-function setViewMenuOpen(open) {
-  viewMenuEl.classList.toggle('hidden', !open);
-}
-viewToggleEl.addEventListener('click', (e) => {
-  e.stopPropagation();
-  setViewMenuOpen(viewMenuEl.classList.contains('hidden'));
-});
-// Click anywhere else closes the menu (but not clicks inside it).
-document.addEventListener('click', (e) => {
-  if (!viewMenuEl.classList.contains('hidden') && !e.target.closest('#view-menu-wrap')) {
-    setViewMenuOpen(false);
-  }
-});
-vmHideInactiveEl.addEventListener('change', () => {
-  hideInactive = vmHideInactiveEl.checked;
+filterLiveEl.addEventListener('click', () => {
+  hideInactive = !hideInactive;
   saveViewPrefs();
   refreshViewMenu();
   render();
 });
-vmHideArchivedEl.addEventListener('change', () => {
-  showArchived = !vmHideArchivedEl.checked; // checked = hide archived
+filterArchEl.addEventListener('click', () => {
+  showArchived = !showArchived;
   saveViewPrefs();
   refreshViewMenu();
   render();
