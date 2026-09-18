@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' file: data:;"
     />
     <title>seshMan</title>
     <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
@@ -36,6 +36,7 @@
       <button id="grid-toggle" title="Toggle grid overview">⊞ grid</button>
       <button id="board-toggle" title="Agent bulletin board">▤ board</button>
       <button id="usage-toggle" title="Token usage (from local transcripts)">▦ usage</button>
+      <button id="shots-toggle" title="Insert a recent screenshot into the active session">▧ shots</button>
       <button id="queue-toggle" title="Prompt queue">queue</button>
       <div class="winctrl-spacer"></div>
     </div>
@@ -160,6 +161,17 @@
           <button id="bm-close" title="Close">×</button>
         </div>
         <div id="bm-list"></div>
+      </div>
+    </div>
+
+    <div id="shots-modal" class="hidden">
+      <div class="shots-card">
+        <div class="bm-head">
+          <span>Screenshots <span id="shots-month"></span></span>
+          <span id="shots-hint"></span>
+          <button id="shots-close" title="Close">×</button>
+        </div>
+        <div id="shots-grid"></div>
       </div>
     </div>
 

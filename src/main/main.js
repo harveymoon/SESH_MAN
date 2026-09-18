@@ -272,6 +272,45 @@ ipcMain.on('clipboard:read', (e) => {
 ipcMain.on('clipboard:write', (_e, text) => {
   clipboard.writeText(typeof text === 'string' ? text : '');
 });
+// Cheap probe: is there an image on the clipboard? (Used to forward a literal
+// Ctrl+V to claude, which reads the OS clipboard itself for [Image #N] pastes.)
+ipcMain.on('clipboard:has-image', (e) => {
+  e.returnValue = clipboard.availableFormats().some((f) => f.startsWith('image/'));
+});
+
+// ---- Screenshot picker: current month folder under Pictures\Screenshots ----
+ipcMain.handle('screenshots:list', () => {
+  const base = path.join(app.getPath('pictures'), 'Screenshots');
+  const monthRe = /^\d{4}-\d{2}$/;
+  const now = new Date();
+  const thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  let dir = path.join(base, thisMonth);
+  try {
+    if (!fs.existsSync(dir)) {
+      // No folder yet this month — fall back to the newest month folder.
+      const months = fs.readdirSync(base).filter((m) => monthRe.test(m)).sort().reverse();
+      dir = months.length ? path.join(base, months[0]) : base;
+    }
+    const exts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+    const items = fs
+      .readdirSync(dir)
+      .filter((f) => exts.has(path.extname(f).toLowerCase()))
+      .map((f) => {
+        const full = path.join(dir, f);
+        try {
+          return { name: f, path: full, mtime: fs.statSync(full).mtimeMs };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 60);
+    return { dir, items };
+  } catch (_) {
+    return { dir: null, items: [] };
+  }
+});
 
 // Folder picker for "new session here".
 ipcMain.handle('dialog:pickFolder', async () => {

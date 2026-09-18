@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('api', {
   // sandboxed renderer). sendSync keeps reads synchronous for inline insert.
   clipboardRead: () => ipcRenderer.sendSync('clipboard:read'),
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
+  clipboardHasImage: () => ipcRenderer.sendSync('clipboard:has-image'),
+
+  // Screenshot picker (current month folder of Pictures\Screenshots)
+  listScreenshots: () => ipcRenderer.invoke('screenshots:list'),
 
   // Deck API bridge: publish the computed view, receive focus commands
   deckPublish: (snapshot) => ipcRenderer.send('deck:publish', snapshot),

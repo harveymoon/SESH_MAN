@@ -1228,6 +1228,67 @@ function usageRow(cells) {
 
 usageToggleEl.addEventListener('click', () => setUsageMode(!usageMode));
 
+// ---------- Screenshot picker ----------
+// Grid popup of this month's Pictures\Screenshots folder; clicking a shot
+// inserts its (quoted) path at the active hosted session's cursor — same
+// no-submit behavior as dropping a file onto the pane.
+const shotsToggleEl = document.getElementById('shots-toggle');
+const shotsModalEl = document.getElementById('shots-modal');
+const shotsGridEl = document.getElementById('shots-grid');
+const shotsMonthEl = document.getElementById('shots-month');
+const shotsHintEl = document.getElementById('shots-hint');
+const shotsCloseEl = document.getElementById('shots-close');
+
+function fileUrl(p) {
+  return (
+    'file:///' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F')
+  );
+}
+
+async function openShotsModal() {
+  shotsGridEl.innerHTML = '<div class="shots-empty">loading…</div>';
+  shotsHintEl.textContent = activeTermEntry() ? '' : 'open a hosted session first';
+  shotsModalEl.classList.remove('hidden');
+  const res = await window.api.listScreenshots();
+  shotsMonthEl.textContent = res.dir ? '· ' + res.dir.split(/[\\/]/).pop() : '';
+  shotsGridEl.innerHTML = '';
+  if (!res.items.length) {
+    shotsGridEl.innerHTML = '<div class="shots-empty">No screenshots found.</div>';
+    return;
+  }
+  for (const it of res.items) {
+    const tile = document.createElement('div');
+    tile.className = 'shot-tile';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = fileUrl(it.path);
+    img.alt = it.name;
+    const cap = document.createElement('div');
+    cap.className = 'shot-cap';
+    cap.textContent = relTime(it.mtime);
+    tile.title = it.name + '\nclick to insert its path into the active session';
+    tile.appendChild(img);
+    tile.appendChild(cap);
+    tile.addEventListener('click', () => {
+      const e = activeTermEntry();
+      if (!e) {
+        shotsHintEl.textContent = 'open a hosted session first';
+        return;
+      }
+      const p = /\s/.test(it.path) ? '"' + it.path + '"' : it.path;
+      window.api.sendInput(activePtyId, p + ' '); // insert at cursor, no submit
+      shotsModalEl.classList.add('hidden');
+      e.term.focus();
+    });
+    shotsGridEl.appendChild(tile);
+  }
+}
+shotsToggleEl.addEventListener('click', openShotsModal);
+shotsCloseEl.addEventListener('click', () => shotsModalEl.classList.add('hidden'));
+shotsModalEl.addEventListener('click', (e) => {
+  if (e.target === shotsModalEl) shotsModalEl.classList.add('hidden');
+});
+
 // ---------- Grid overview (full-window cards) ----------
 function renderGrid(shown) {
   gridViewEl.innerHTML = '';
@@ -1502,7 +1563,14 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
 
   const pasteClipboard = () => {
     const text = window.api.clipboardRead();
-    if (text) term.paste(text); // xterm handles bracketed-paste; single insert
+    if (text) {
+      term.paste(text); // xterm handles bracketed-paste; single insert
+    } else if (window.api.clipboardHasImage()) {
+      // Image (no text) on the clipboard: forward a literal Ctrl+V to the pty.
+      // claude reads the OS clipboard itself — same machine, same clipboard —
+      // and attaches it as [Image #N], exactly like a plain terminal.
+      window.api.sendInput(ptyId, '\x16');
+    }
   };
   // Clipboard keys. Zoom keys bubble to the window handler. Paste on Ctrl+V or
   // Ctrl+Shift+V. Copy on Ctrl+Shift+C, or Ctrl+C only when text is selected
