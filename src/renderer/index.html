@@ -14,7 +14,37 @@
     <div id="titlebar">
       <span class="logo">&gt;_&lt;</span>
       <span class="app-name">seshMan</span>
-      <input id="search" type="text" placeholder="search sessions…" spellcheck="false" />
+      <div id="search-wrap">
+        <input id="search" type="text" placeholder="search sessions…" spellcheck="false" />
+        <button id="search-clear" class="hidden" title="Clear search" aria-label="Clear search">×</button>
+      </div>
+      <div id="view-menu-wrap">
+        <button id="view-toggle" title="Show / hide sessions" aria-label="Show / hide sessions">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+        <div id="view-menu" class="hidden">
+          <label class="vm-item">
+            <input type="checkbox" id="vm-hide-inactive" />
+            <span>Hide inactive sessions</span>
+          </label>
+          <label class="vm-item">
+            <input type="checkbox" id="vm-hide-archived" />
+            <span>Hide archived</span>
+            <span id="vm-archived-count" class="vm-count"></span>
+          </label>
+        </div>
+      </div>
+      <button id="settings-toggle" title="Settings" aria-label="Settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
       <button id="grid-toggle" title="Toggle grid overview">⊞ grid</button>
       <button id="queue-toggle" title="Prompt queue">queue</button>
       <div class="winctrl-spacer"></div>
@@ -26,7 +56,6 @@
           <div class="subtitle-row">
             <span class="subtitle" id="session-count">scanning…</span>
             <div class="hdr-controls">
-              <button id="archived-toggle" title="Show archived sessions">archived</button>
               <select id="source-filter" title="Filter by session source">
                 <option value="both">both</option>
                 <option value="cli">cli</option>
@@ -45,7 +74,10 @@
         <div id="pane-header" class="empty">
           <div class="pane-titles">
             <span id="pane-title"></span>
-            <span id="pane-sub"></span>
+            <div class="pane-sub-row">
+              <span id="pane-sub"></span>
+              <span id="pane-model" class="hidden"></span>
+            </div>
           </div>
           <span id="pane-close" title="Close session">×</span>
         </div>
@@ -99,6 +131,44 @@
     </div>
 
     <div id="group-modal" class="hidden"></div>
+
+    <div id="settings-modal" class="hidden">
+      <div class="bm-card st-card">
+        <div class="bm-head">
+          <span>Settings</span>
+          <button id="st-close" title="Close">×</button>
+        </div>
+        <div id="st-body">
+          <label class="st-row">
+            <span class="st-label">theme</span>
+            <select id="st-theme">
+              <option value="dark">dark</option>
+              <option value="light">light</option>
+            </select>
+          </label>
+          <label class="st-row">
+            <span class="st-label">terminal font</span>
+            <input id="st-font" type="text" list="st-font-presets" spellcheck="false"
+                   placeholder="Cascadia Code" />
+            <datalist id="st-font-presets">
+              <option value="Cascadia Code"></option>
+              <option value="Cascadia Mono"></option>
+              <option value="Consolas"></option>
+              <option value="JetBrains Mono"></option>
+              <option value="Fira Code"></option>
+              <option value="IBM Plex Mono"></option>
+              <option value="Courier New"></option>
+            </datalist>
+          </label>
+          <label class="st-row">
+            <span class="st-label">terminal font size</span>
+            <input id="st-size" type="number" min="8" max="28" step="1" />
+            <span class="st-hint">ctrl + / − anywhere</span>
+          </label>
+          <div class="st-note">changes apply instantly and are saved</div>
+        </div>
+      </div>
+    </div>
 
     <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

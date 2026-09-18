@@ -142,7 +142,13 @@ function parseTranscript(file) {
     customTitle: null, // user's /rename title
     messageCount: 0,
     lastActivity: 0,
+    // Timestamp of the most recent real user/assistant MESSAGE only. Unlike
+    // lastActivity (which also moves on summaries, title writes, and file
+    // mtime touches), this only advances when there's genuinely new content
+    // to read — so a read session won't re-notify after a background write.
+    lastMessageActivity: 0,
     lastMessage: null, // { role, text } of the most recent user/assistant message
+    model: '', // model id from the most recent assistant turn (e.g. claude-fable-5)
   };
   let raw;
   try {
@@ -169,6 +175,15 @@ function parseTranscript(file) {
       meta.messageCount++;
       const text = messageText(r.message);
       if (text && text.trim()) meta.lastMessage = { role: r.type, text: text.trim() };
+      if (r.timestamp) {
+        const mt = Date.parse(r.timestamp);
+        if (mt > meta.lastMessageActivity) meta.lastMessageActivity = mt;
+      }
+      // Track the model actually answering (last assistant turn wins, so a
+      // mid-session /model switch shows up). Skip synthetic placeholder turns.
+      if (r.type === 'assistant' && r.message && r.message.model && r.message.model !== '<synthetic>') {
+        meta.model = r.message.model;
+      }
     }
     if (r.timestamp) {
       const t = Date.parse(r.timestamp);
@@ -310,6 +325,8 @@ class SessionWatcher extends EventEmitter {
           startedAt: sf ? sf.startedAt || 0 : 0,
           updatedAt,
           lastActivity: Math.max(meta.lastActivity || 0, updatedAt, st.mtimeMs),
+          lastMessageActivity: meta.lastMessageActivity || 0,
+          model: meta.model || '',
           aiTitle: meta.aiTitle,
           lastPrompt: meta.lastPrompt,
           lastMessage: meta.lastMessage,
@@ -327,10 +344,14 @@ class SessionWatcher extends EventEmitter {
   isLive(sessionId) {
     const sf = readSessionFiles().get(sessionId);
     if (!sf || !sf.pid) return false;
-    if (!isAliveNow(sf.pid)) return false;
-    // pid alive — if we have cached start time, confirm it's the same process.
+    // Authoritative liveness = a claude.exe with this pid (and a matching start
+    // time, to defeat pid reuse) is currently tracked. isAliveNow() alone is NOT
+    // enough: after a reboot a dead session's pid gets recycled by an unrelated
+    // process (e.g. a driver), which then read as "live in another window" and
+    // hid the resume button — the jumbotron-cloud-auth-solve lock. Requiring
+    // claude.exe membership also keeps this in agreement with list()'s `running`.
     if (this.proc.byPid.has(sf.pid)) return this.proc.matches(sf.pid, sf.startedAt);
-    return true;
+    return false;
   }
 
   async scan() {

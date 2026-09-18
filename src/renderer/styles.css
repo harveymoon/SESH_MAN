@@ -19,6 +19,30 @@
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
 }
 
+/* light mode: same variable contract, remapped (toggled in ⚙ settings) */
+body.light {
+  --bg: #f2f2ef;
+  --panel: #fafaf8;
+  --panel-2: #ececea;
+  --border: #d9d9d4;
+  --border-2: #c3c3bd;
+  --text: #23262b;
+  --muted: #5a616b;
+  --faint: #8a919b;
+  --accent: #4d7a6e;
+  --busy: #a87c2a;
+  --idle: #4c7d5c;
+  --dead: #c6c6c1;
+  --alert: #c06a35;
+  --waiting: #2f9455;
+  --row-stopped: #f6f6f4;
+  --row-idle: #e9e9e6;
+  --row-busy: #dcdfe3;
+  --sidebar-bg: #e6e6e2; /* mirrors dark's "darker than panels" sidebar */
+  background: var(--bg);
+  color: var(--text);
+}
+
 * { box-sizing: border-box; border-radius: 0 !important; }
 
 html, body {
@@ -52,23 +76,43 @@ body { display: flex; flex-direction: column; }
   letter-spacing: 0.2em;
   text-transform: uppercase;
 }
-#search {
+#search-wrap {
   -webkit-app-region: no-drag;
+  position: relative;
   flex: 1;
   max-width: 380px;
+  display: flex;
+}
+#search {
+  flex: 1;
+  width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border-2);
   color: var(--text);
   font-family: var(--mono);
   font-size: 11px;
-  padding: 5px 9px;
+  padding: 5px 22px 5px 9px; /* room for the clear button on the right */
   outline: none;
 }
 #search:focus { border-color: var(--accent); }
 #search::placeholder { color: var(--faint); }
+#search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--faint);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+#search-clear:hover { color: var(--text); }
+#search-clear.hidden { display: none; }
 #grid-toggle {
   -webkit-app-region: no-drag;
-  margin-left: auto;
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border-2);
@@ -102,7 +146,7 @@ body { display: flex; flex-direction: column; }
 #sidebar {
   width: 256px;
   min-width: 256px;
-  background: #060708; /* darker than panels for stronger list contrast */
+  background: var(--sidebar-bg, #060708); /* darker than panels for stronger list contrast */
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -139,18 +183,62 @@ body { display: flex; flex-direction: column; }
 #source-filter option { background: var(--panel); color: var(--text); }
 
 .hdr-controls { display: flex; align-items: center; gap: 6px; }
-#archived-toggle {
+
+/* ---- Titlebar view (eye) dropdown — governs both sidebar list and grid ---- */
+#view-menu-wrap {
+  -webkit-app-region: no-drag;
+  position: relative;
+  margin-left: auto; /* push the eye + grid + queue cluster to the right */
+  display: flex;
+  align-items: center;
+}
+#view-toggle,
+#settings-toggle {
+  -webkit-app-region: no-drag;
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border-2);
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  padding: 3px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 7px;
   cursor: pointer;
 }
-#archived-toggle:hover { color: var(--text); border-color: var(--accent); }
-#archived-toggle.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+#view-toggle:hover,
+#settings-toggle:hover { color: var(--text); border-color: var(--accent); }
+/* highlighted whenever a non-default filter is hiding sessions */
+#view-toggle.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+#view-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 120;
+  min-width: 190px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  padding: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+#view-menu.hidden { display: none; }
+.vm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.vm-item:hover { background: var(--panel); }
+.vm-item input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+.vm-item span { flex: 1; }
+.vm-count {
+  flex: 0 0 auto !important;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
 
 /* right-click context menu */
 #context-menu {
@@ -210,6 +298,31 @@ body { display: flex; flex-direction: column; }
 /* archived (shown only when "archived" toggle is on) */
 .session.archived { opacity: 0.5; }
 .session.archived .session-project { font-style: italic; text-decoration: line-through; text-decoration-color: var(--faint); }
+
+/* NEEDS INPUT: a hosted session blocking on a prompt — teal ring + glow + a
+   pulsing "?". Stronger/more urgent than the green "your turn" (unread) state.
+   Declared after .session.unread so it wins the equal-specificity tie. */
+.session.needs-input {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 9px -3px var(--accent);
+}
+.session.needs-input .dot { animation: attn-pulse 1.4s ease-in-out infinite; }
+.needs-q {
+  margin-left: 4px;
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  animation: attn-pulse 1.2s ease-in-out infinite;
+}
+/* grid card variant */
+.card.needs-input {
+  border-color: var(--accent);
+  border-top-color: var(--accent);
+  box-shadow: 0 0 10px -3px var(--accent);
+}
 
 @keyframes attn-pulse {
   0%, 100% { opacity: 1; }
@@ -311,6 +424,19 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pane-sub-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* current-model chip: parsed live from the transcript's last assistant turn */
+#pane-model {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid rgba(143, 182, 173, 0.35);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
 #pane-sub {
   font-size: 10px;
   color: var(--muted);
@@ -380,7 +506,7 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 .log-resume:hover { color: var(--bg); background: var(--idle); }
-.log-scroll { flex: 1; overflow-y: auto; padding: 12px 16px; }
+.log-scroll { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: var(--term-font, var(--mono)); }
 .log-msg { margin-bottom: 13px; }
 .log-role {
   font-size: 8.5px;
@@ -389,9 +515,18 @@ body { display: flex; flex-direction: column; }
   margin-bottom: 3px;
 }
 .log-msg.assistant .log-role { color: var(--accent); }
-.log-msg.user .log-role { color: var(--muted); }
 .log-text { white-space: pre-wrap; word-break: break-word; font-size: var(--log-font, 11px); line-height: 1.55; }
-.log-msg.user .log-text { color: var(--muted); }
+/* Highlight the entire human ("YOU") block — tinted background + accent bar —
+   so your prompts are easy to pick out from Claude's replies when skimming. */
+.log-msg.user {
+  background: rgba(143, 182, 173, 0.08); /* subtle --accent (#8fb6ad) tint */
+  border-left: 2px solid var(--accent);
+  padding: 7px 12px;
+  margin-left: -8px;
+  margin-right: -8px;
+}
+.log-msg.user .log-role { color: var(--accent); }
+.log-msg.user .log-text { color: var(--text); }
 .log-empty { color: var(--faint); text-align: center; padding: 36px; font-size: 11px; }
 .term-pane.exited::after {
   content: "ended";
@@ -556,6 +691,30 @@ body { display: flex; flex-direction: column; }
   padding: 4px 7px;
   outline: none;
 }
+.bm-row-cat {
+  flex: 0 0 96px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 4px 6px;
+  outline: none;
+}
+.bm-row-cat:focus { border-color: var(--accent); }
+.bm-row-cat::placeholder { color: var(--faint); }
+.bm-row-submit {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  cursor: pointer;
+}
+.bm-row-submit input { accent-color: var(--accent); margin: 0; cursor: pointer; }
 .bm-row-del { background: transparent; border: 1px solid var(--border-2); color: var(--muted); font-family: var(--mono); font-size: 10px; padding: 4px 8px; cursor: pointer; }
 .bm-row-del:hover { color: #b46a6a; border-color: #b46a6a; }
 .bm-row-text {
@@ -583,6 +742,54 @@ body { display: flex; flex-direction: column; }
   letter-spacing: 0.04em;
 }
 .group-badge:hover { border-color: var(--accent); color: var(--bg) !important; background: var(--accent); }
+
+/* settings modal (mirrors #bookmark-modal) */
+#settings-modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+#settings-modal.hidden { display: none; }
+.st-card { width: 400px; }
+#st-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+#st-close:hover { color: var(--text); }
+#st-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 11px; }
+.st-row { display: flex; align-items: center; gap: 10px; }
+.st-label {
+  flex: 0 0 118px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.st-row select,
+.st-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 7px;
+  outline: none;
+}
+.st-row input:focus,
+.st-row select:focus { border-color: var(--accent); }
+.st-row input[type='number'] { flex: 0 0 64px; }
+.st-hint { font-size: 9px; color: var(--faint); white-space: nowrap; }
+.st-note { font-size: 9px; color: var(--faint); letter-spacing: 0.04em; }
 
 /* create-group modal (mirrors #bookmark-modal) */
 #group-modal {
@@ -628,6 +835,20 @@ body { display: flex; flex-direction: column; }
   outline: none;
 }
 .gm-name:focus { border-color: var(--accent); }
+.gm-topic {
+  margin: 0 14px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 7px 9px;
+  outline: none;
+  resize: vertical;
+}
+.gm-topic:focus { border-color: var(--accent); }
+.gm-topic::placeholder { color: var(--faint); }
 .gm-list { overflow-y: auto; padding: 4px 10px; }
 .gm-list.gm-flash { outline: 1px solid var(--alert); }
 .gm-member {
@@ -665,6 +886,8 @@ body { display: flex; flex-direction: column; }
 }
 #group-header.hidden { display: none; }
 body.group-mode #pane-header { display: none !important; }
+/* the prompt queue is per-single-session; hide it while in the group overlay */
+body.group-mode #queue-pane { display: none !important; }
 #group-header-name { font-size: 14px; font-weight: 600; color: var(--accent); letter-spacing: 0.02em; }
 .group-header-actions { display: flex; align-items: center; gap: 8px; }
 #group-end {

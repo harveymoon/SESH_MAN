@@ -5,8 +5,13 @@
 const sessionListEl = document.getElementById('session-list');
 const sessionCountEl = document.getElementById('session-count');
 const sourceFilterEl = document.getElementById('source-filter');
-const archivedToggleEl = document.getElementById('archived-toggle');
+const viewToggleEl = document.getElementById('view-toggle');
+const viewMenuEl = document.getElementById('view-menu');
+const vmHideInactiveEl = document.getElementById('vm-hide-inactive');
+const vmHideArchivedEl = document.getElementById('vm-hide-archived');
+const vmArchivedCountEl = document.getElementById('vm-archived-count');
 const searchEl = document.getElementById('search');
+const searchClearEl = document.getElementById('search-clear');
 const gridToggleEl = document.getElementById('grid-toggle');
 const gridViewEl = document.getElementById('grid-view');
 const terminalsEl = document.getElementById('terminals');
@@ -14,6 +19,7 @@ const emptyStateEl = document.getElementById('empty-state');
 const paneHeaderEl = document.getElementById('pane-header');
 const paneTitleEl = document.getElementById('pane-title');
 const paneSubEl = document.getElementById('pane-sub');
+const paneModelEl = document.getElementById('pane-model');
 const paneCloseEl = document.getElementById('pane-close');
 const groupModalEl = document.getElementById('group-modal');
 const groupHeaderEl = document.getElementById('group-header');
@@ -56,6 +62,8 @@ let viewed = {};
 // Archived sessions (hidden by default). Persisted to disk settings.
 let archived = new Set();
 let showArchived = false;
+// "Hide inactive" = drop sessions with no live process (stopped). Persisted.
+let hideInactive = false;
 // Agent-chat groups: [{ id, name, members:[sessionId], createdAt, active }]
 let groups = [];
 let currentGroup = null; // group whose side-by-side view is open
@@ -104,12 +112,20 @@ function hostedStatus(entry) {
   return live ? live.status : null;
 }
 
+// The timestamp that counts as "new to read." Deliberately NOT lastActivity:
+// that also moves on summaries, title writes, and bare file-mtime touches, which
+// made a read session re-pulse hours later with nothing new. lastMessageActivity
+// only advances on a real user/assistant message.
+function activityFor(s) {
+  return s.lastMessageActivity || 0;
+}
+
 // A session is "unread" if it has new activity since you last viewed it.
 // (Baselined to "read" the first time we see it — see update().)
 function isUnread(s) {
   const seen = viewed[s.sessionId];
   if (seen == null) return false;
-  return (s.lastActivity || 0) > seen + 1000;
+  return activityFor(s) > seen + 1000;
 }
 
 // "Waiting / needs you" = a ready session (idle/shell, finished its turn) that
@@ -120,6 +136,16 @@ function isWaiting(s) {
   const c = displayState(s).stateClass;
   if (c !== 'idle' && c !== 'shell') return false; // only "ready" states
   return isUnread(s);
+}
+
+// "Needs input" = a HOSTED session that is currently showing one of Claude
+// Code's BLOCKING prompts (tool approval, option menu, plan/trust dialog).
+// Detected by scanning the live terminal buffer (see scanPrompt). This is a
+// stronger, more urgent signal than isWaiting ("finished its turn"), and only
+// works for sessions seshMan hosts — there's no native status for it.
+function needsInputFor(s) {
+  const e = hostedTerminalFor(s);
+  return !!(e && e.needsInput && !e.exited);
 }
 
 // Resolve how a row/card should display, accounting for hosted terminals.
@@ -145,6 +171,47 @@ const THEME = {
   black: '#0a0a0b',
   brightBlack: '#44484f',
 };
+const LIGHT_THEME = {
+  background: '#f4f4f1',
+  foreground: '#2a2e35',
+  cursor: '#4d7a6e',
+  cursorAccent: '#f4f4f1',
+  selectionBackground: '#cdd6d2',
+  black: '#f4f4f1',
+  brightBlack: '#9aa1ab',
+};
+// ---------- UI settings (persisted; editable in the ⚙ settings modal) ----------
+const DEFAULT_TERM_FONT = '"Cascadia Code", "JetBrains Mono", Consolas, monospace';
+let termFontFamily = DEFAULT_TERM_FONT;
+let uiTheme = 'dark';
+function termTheme() {
+  return uiTheme === 'light' ? LIGHT_THEME : THEME;
+}
+// A bare font name becomes a stack with a monospace fallback; a full
+// comma-separated stack is taken as-is; empty resets to the default.
+function normalizeFontStack(v) {
+  const t = (v || '').trim();
+  if (!t) return DEFAULT_TERM_FONT;
+  if (t.includes(',')) return t;
+  return (/\s/.test(t) && !/^["']/.test(t) ? '"' + t + '"' : t) + ', monospace';
+}
+function setTermFont(family) {
+  termFontFamily = normalizeFontStack(family);
+  window.api.saveSettings({ termFont: termFontFamily });
+  document.documentElement.style.setProperty('--term-font', termFontFamily);
+  for (const e of terms.values()) {
+    if (!e.isLog) e.term.options.fontFamily = termFontFamily;
+  }
+  if (activePtyId != null) fitActive(activePtyId);
+}
+function setTheme(mode) {
+  uiTheme = mode === 'light' ? 'light' : 'dark';
+  window.api.saveSettings({ theme: uiTheme });
+  document.body.classList.toggle('light', uiTheme === 'light');
+  for (const e of terms.values()) {
+    if (!e.isLog) e.term.options.theme = termTheme();
+  }
+}
 
 // ---------- Sidebar rendering ----------
 function statusClass(s) {
@@ -187,6 +254,7 @@ function applyFilters(sessions) {
   const q = searchQuery.trim().toLowerCase();
   return sessions.filter((s) => {
     if (archived.has(s.sessionId) && !showArchived) return false; // hidden by default
+    if (hideInactive && !displayState(s).running) return false; // drop stopped sessions
     if (sourceFilter !== 'both' && s.source !== sourceFilter) return false;
     if (!q) return true;
     const hay = [
@@ -224,9 +292,15 @@ function buildDeckSnapshot() {
       id: s.sessionId,
       name: displayTitle(s),
       project: s.project,
+      cwd: s.cwd || '',
       state: deckState(s),
       running: displayState(s).running,
+      // true only when seshMan hosts a live PTY for it → prompt injection works.
+      hosted: isHosted(s),
       waiting: isWaiting(s),
+      // none | waiting (finished turn) | question (blocking on a prompt).
+      // 'error' reserved for a later pass (no crash-detection signal yet).
+      attention: needsInputFor(s) ? 'question' : isWaiting(s) ? 'waiting' : 'none',
       source: s.source,
       lastActive: s.lastActivity,
     })),
@@ -250,10 +324,10 @@ function update(sessions) {
   const activeId = activeSessionId();
   for (const s of sessions) {
     // Baseline newly-seen sessions to "read" (so first sight doesn't pulse).
-    if (viewed[s.sessionId] == null) viewed[s.sessionId] = s.lastActivity || 0;
+    if (viewed[s.sessionId] == null) viewed[s.sessionId] = activityFor(s);
     // The session you're focused on stays read even as it produces output.
     if (s.sessionId === activeId) {
-      viewed[s.sessionId] = Math.max(viewed[s.sessionId], s.lastActivity || 0);
+      viewed[s.sessionId] = Math.max(viewed[s.sessionId], activityFor(s));
     }
     // Adopt sessions we spawned in-app (new/forked) onto their hosting terminal
     // by process id, so clicking them re-focuses instead of opening a log.
@@ -289,12 +363,17 @@ function renderList(shown) {
     }
     const ds = displayState(s);
     const selected = activePtyId != null && s.sessionId === activeSessionId();
+    const needsInput = needsInputFor(s); // blocking prompt on screen → teal + ?
     const unread = isWaiting(s); // ready + new-since-you-looked (+ not focused)
     const isArchived = archived.has(s.sessionId);
     const el = document.createElement('div');
-    // bg = selection; pulse + green outline only for UNREAD ready sessions.
+    // bg = selection; teal ring + ? when blocking on input; else green outline +
+    // pulse for UNREAD ready sessions. needs-input wins over unread (CSS order).
     el.className =
-      'session' + (selected ? ' selected' : '') + (unread ? ' unread' : '') + (isArchived ? ' archived' : '');
+      'session' +
+      (selected ? ' selected' : '') +
+      (needsInput ? ' needs-input' : unread ? ' unread' : '') +
+      (isArchived ? ' archived' : '');
 
     el.innerHTML = `
       <div class="session-top">
@@ -321,6 +400,15 @@ function renderList(shown) {
     el.querySelector('.session-project').textContent = displayTitle(s); // session title (bold)
     el.querySelector('.session-title').textContent = '▸ ' + s.project; // folder (secondary)
     el.title = `${displayTitle(s)}\n${s.cwd}\nsession ${s.sessionId}`;
+
+    // Pulsing "?" when this session is blocking on a prompt (needs your answer).
+    if (needsInput) {
+      const q = document.createElement('span');
+      q.className = 'needs-q';
+      q.textContent = '?';
+      q.title = 'This session is waiting for your answer';
+      el.querySelector('.session-top').appendChild(q);
+    }
 
     // Group-chat link badge(s) for sessions that are members of an active group.
     const meta = el.querySelector('.session-meta');
@@ -360,7 +448,7 @@ function toggleArchive(id) {
   if (archived.has(id)) archived.delete(id);
   else archived.add(id);
   saveArchived();
-  refreshArchivedToggle();
+  refreshViewMenu();
   render();
 }
 function closeContextMenu() {
@@ -404,9 +492,13 @@ function activeGroups() {
 function groupsForSession(sessionId) {
   return activeGroups().filter((g) => g.members.includes(sessionId));
 }
-function groupJoinPrompt(name) {
+function groupJoinPrompt(name, topic) {
+  const t = (topic || '').trim();
+  const intro = t
+    ? `Please use the agent-chat skill to join the group "${name}" and coordinate with the other agent(s) there. The topic of this conversation is:\n\n  ${t}\n`
+    : `Please use the agent-chat skill to join the group "${name}" and coordinate with the other agent(s) there.\n`;
   return (
-    `Please use the agent-chat skill to join the group "${name}" and coordinate with the other agent(s) there.\n` +
+    intro +
     `Join:  & "$env:USERPROFILE\\.claude\\skills\\agent-chat\\.venv\\Scripts\\python.exe" "$env:USERPROFILE\\.claude\\skills\\agent-chat\\agentchat.py" join ${name}\n` +
     `Then use the skill to read messages (\`agentchat read ${name} --wait 30\`) and reply (\`agentchat send ${name} "..."\`). Stay in the group until told to conclude.`
   );
@@ -454,6 +546,13 @@ function openGroupModal(seed) {
   nameInput.value = sanitizeGroupName(seed && seed.project) || 'group';
   card.appendChild(nameInput);
 
+  // Optional topic — injected into the intro/join message sent to each member.
+  const topicInput = document.createElement('textarea');
+  topicInput.className = 'gm-topic';
+  topicInput.rows = 2;
+  topicInput.placeholder = 'topic of conversation (optional) — sent to each member';
+  card.appendChild(topicInput);
+
   const listWrap = document.createElement('div');
   listWrap.className = 'gm-list';
   if (hosted.length < 2) {
@@ -492,7 +591,7 @@ function openGroupModal(seed) {
       return;
     }
     groupModalEl.classList.add('hidden');
-    createGroup(name, members);
+    createGroup(name, members, topicInput.value);
   });
   foot.appendChild(createBtn);
   card.appendChild(foot);
@@ -506,14 +605,14 @@ groupModalEl.addEventListener('click', (e) => {
   if (e.target === groupModalEl) groupModalEl.classList.add('hidden');
 });
 
-function createGroup(name, memberSessionIds) {
+function createGroup(name, memberSessionIds, topic) {
   const resolved = [];
   for (const sid of memberSessionIds) {
     const key = hostedKeyFor(sid);
     if (key != null) resolved.push({ sessionId: sid, ptyId: key });
   }
   if (resolved.length < 2) return;
-  const prompt = groupJoinPrompt(name);
+  const prompt = groupJoinPrompt(name, topic);
   // Paste into every member, then submit all in one tick (near-simultaneous).
   for (const m of resolved) pastePromptTo(m.ptyId, prompt);
   setTimeout(() => {
@@ -522,6 +621,7 @@ function createGroup(name, memberSessionIds) {
   const group = {
     id: newGroupId(),
     name,
+    topic: (topic || '').trim() || null,
     members: resolved.map((m) => m.sessionId),
     createdAt: Date.now(),
     active: true,
@@ -600,7 +700,9 @@ function renderGroupHistory(res) {
     row.className = 'log-msg';
     const role = document.createElement('div');
     role.className = 'log-role';
-    role.textContent = m.from || m.type || '·';
+    // Live MQTT envelopes carry "from"; the dashboard history API echoes its DB
+    // column "sender" — accept either so names render in both cases.
+    role.textContent = m.from || m.sender || m.type || '·';
     const body = document.createElement('div');
     body.className = 'log-text';
     body.textContent =
@@ -642,16 +744,18 @@ function renderGrid(shown) {
     return;
   }
   for (const s of shown) {
-    const waitingForYou = isWaiting(s);
+    const needsInput = needsInputFor(s); // blocking prompt → teal + ?
+    const waitingForYou = !needsInput && isWaiting(s);
     const ds = displayState(s);
     const card = document.createElement('div');
-    card.className = 'card ' + ds.stateClass + (waitingForYou ? ' waiting' : '');
+    card.className =
+      'card ' + ds.stateClass + (needsInput ? ' needs-input' : '') + (waitingForYou ? ' waiting' : '');
 
     const msg = s.lastMessage;
     card.innerHTML = `
       <div class="card-top">
         <span class="card-project"></span>
-        ${waitingForYou ? '<span class="attn-dot"></span>' : ''}
+        ${needsInput ? '<span class="needs-q">?</span>' : waitingForYou ? '<span class="attn-dot"></span>' : ''}
         <span class="card-status"></span>
       </div>
       <div class="card-sub">
@@ -696,9 +800,20 @@ function setGridMode(on) {
 async function openSession(session) {
   const hostedKey = hostedKeyFor(session); // matches click-opened AND in-app-spawned terminals
   if (hostedKey != null) {
+    // A LIVE group member → bring up the side-by-side group overlay focused on
+    // it. (The overlay is only shown by clicking a member, and is dismissed by
+    // clicking any non-member below — it no longer sticks until the group ends.)
+    const grp = activeGroups().find((g) => g.members.includes(session.sessionId));
+    if (grp) {
+      openGroupView(grp);
+      focusTab(hostedKey);
+      return;
+    }
+    if (currentGroup) setGroupView(null); // non-member clicked → leave the overlay
     focusTab(hostedKey);
     return;
   }
+  if (currentGroup) setGroupView(null); // stopped/external session → leave the overlay
   const live = await window.api.isSessionLive(session.sessionId);
   openLogView(session, live);
 }
@@ -787,13 +902,13 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   terminalsEl.appendChild(pane);
 
   const term = new Terminal({
-    fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, monospace',
+    fontFamily: termFontFamily,
     fontSize: termFontSize,
     lineHeight: 1.15,
     letterSpacing: 0,
     cursorBlink: true,
     cursorStyle: 'bar',
-    theme: THEME,
+    theme: termTheme(),
     allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();
@@ -830,7 +945,16 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     return;
   }
 
-  term.onData((data) => window.api.sendInput(ptyId, data));
+  term.onData((data) => {
+    // Typing into the pane = you're answering the prompt → clear the flag now
+    // (the next buffer scan confirms it once the prompt clears from screen).
+    const e = terms.get(ptyId);
+    if (e && e.needsInput) {
+      e.needsInput = false;
+      render();
+    }
+    window.api.sendInput(ptyId, data);
+  });
 
   const pasteClipboard = () => {
     const text = window.api.clipboardRead();
@@ -891,7 +1015,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     }
   });
 
-  const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false };
+  const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false };
   terms.set(ptyId, entry);
   if (sessionId) sessionToPty.set(sessionId, ptyId);
 
@@ -900,6 +1024,15 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
 
 // Keep open tabs' titles in sync with the latest session data (so a /rename
 // while a session is open updates the header to match the sidebar).
+// "claude-opus-4-8" -> "opus 4.8", "claude-haiku-4-5-20251001" -> "haiku 4.5",
+// "claude-fable-5" -> "fable 5". Unknown shapes fall back to the raw id.
+function prettyModel(id) {
+  if (!id) return '';
+  const m = /^claude-([a-z]+(?:-[a-z]+)*)-(\d+(?:-\d+)*?)(?:-\d{8})?$/.exec(id);
+  if (!m) return id;
+  return m[1].replace(/-/g, ' ') + ' ' + m[2].replace(/-/g, '.');
+}
+
 function refreshEntryLabels() {
   const byId = new Map(latestSessions.map((s) => [s.sessionId, s]));
   for (const e of terms.values()) {
@@ -907,6 +1040,7 @@ function refreshEntryLabels() {
     if (s) {
       e.label = displayTitle(s);
       e.title = '▸ ' + s.project;
+      e.model = s.model || '';
     }
   }
 }
@@ -921,6 +1055,10 @@ function paintPaneHeader() {
   paneHeaderEl.classList.remove('empty');
   paneTitleEl.textContent = entry.label + (entry.isLog ? '  (log)' : '');
   paneSubEl.textContent = entry.title || '';
+  const model = prettyModel(entry.model);
+  paneModelEl.textContent = model;
+  paneModelEl.title = entry.model || ''; // raw id on hover
+  paneModelEl.classList.toggle('hidden', !model);
 }
 
 // Full header update incl. queue (only on focus/close — rebuilds queue items).
@@ -995,16 +1133,68 @@ function closeTab(key) {
   render(); // closing a session un-hosts it
 }
 
+// ---------- Blocking-prompt detection (hosted sessions) ----------
+// Heuristic markers for Claude Code's BLOCKING prompts. Pattern-based, so these
+// may need tuning if Claude Code's prompt rendering changes — kept in one place.
+const PROMPT_PATTERNS = [
+  /❯\s*\d+\.\s/, // selection menu: tool/edit approval, option picker
+  /\bDo you want to\b/i, // permission / edit / run prompts
+  /\bWould you like to\b/i, // plan review etc.
+  /\bDo you trust\b/i, // folder-trust dialog
+];
+const promptScanTimers = new Map(); // ptyId -> debounce timer
+
+// Read the bottom screenful of a terminal as plain text (ANSI already stripped
+// by xterm's buffer), where any blocking prompt would be drawn.
+function readBufferTail(term) {
+  try {
+    const buf = term.buffer.active;
+    const rows = term.rows || 24;
+    const start = Math.max(0, buf.length - rows);
+    const out = [];
+    for (let i = start; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) out.push(line.translateToString(true));
+    }
+    return out.join('\n');
+  } catch (_) {
+    return '';
+  }
+}
+
+function scanPrompt(id) {
+  const entry = terms.get(id);
+  if (!entry || entry.isLog || entry.exited) return;
+  const tail = readBufferTail(entry.term);
+  const now = PROMPT_PATTERNS.some((re) => re.test(tail));
+  if (now !== entry.needsInput) {
+    entry.needsInput = now; // flip → repaint the sidebar/grid highlight
+    render();
+  }
+}
+
+// Prompts redraw rapidly; scan shortly after output settles.
+function schedulePromptScan(id) {
+  clearTimeout(promptScanTimers.get(id));
+  promptScanTimers.set(id, setTimeout(() => scanPrompt(id), 150));
+}
+
 // ---------- IPC wiring ----------
 window.api.onPtyData(({ id, data }) => {
   const entry = terms.get(id);
-  if (entry && !entry.isLog) entry.term.write(data);
+  if (entry && !entry.isLog) {
+    entry.term.write(data);
+    schedulePromptScan(id);
+  }
 });
 
 window.api.onPtyExit(({ id }) => {
   const entry = terms.get(id);
   if (entry && !entry.isLog) {
     entry.exited = true;
+    entry.needsInput = false;
+    clearTimeout(promptScanTimers.get(id));
+    promptScanTimers.delete(id);
     entry.pane.classList.add('exited');
     entry.term.write('\r\n\x1b[90m[process exited — close this tab]\x1b[0m\r\n');
     render(); // reflect that it's no longer live
@@ -1026,6 +1216,44 @@ window.api.onDeckFocus((id) => {
   if (s) openSession(s);
 });
 
+// Deck-driven prompt injection (Desk_Deck etc.). Resolve bookmark_id → current
+// text, enforce hosted-only + not-busy + a short per-session debounce, inject,
+// then reply with the HTTP status the API server should return.
+const lastDeckPromptAt = new Map(); // ptyId -> ms of last accepted prompt
+window.api.onDeckPrompt(({ reqId, id, body }) => {
+  const reply = (status, b) => window.api.deckPromptResult(reqId, status, b);
+  const b = body || {};
+  const session = latestSessions.find((x) => x.sessionId === id);
+  const key = hostedKeyFor(session || id); // only sessions we host have a PTY
+  const entry = key != null ? terms.get(key) : null;
+  if (!entry || entry.exited || entry.isLog) {
+    return reply(409, { error: 'not_hosted', message: 'Open this session in seshMan to enable prompts.' });
+  }
+  // bookmark_id (current text) takes precedence over literal text.
+  let text = '';
+  if (b.bookmark_id) {
+    const bm = bookmarks.find((x) => x.id === b.bookmark_id);
+    if (!bm) return reply(404, { error: 'unknown_bookmark', message: 'No bookmark with that id.' });
+    text = bm.text;
+  } else if (typeof b.text === 'string') {
+    text = b.text;
+  }
+  if (!text.trim()) return reply(400, { error: 'empty', message: 'No text or bookmark_id provided.' });
+  // Per-session debounce: kill deck-side back-to-back races.
+  const now = Date.now();
+  if (now - (lastDeckPromptAt.get(key) || 0) < 750) {
+    return reply(429, { error: 'too_soon', message: 'Another prompt was just sent to this session.' });
+  }
+  const submit = !!b.submit;
+  if (submit && hostedStatus(entry) === 'busy') {
+    return reply(409, { error: 'busy', message: 'Session is working; try again when it is ready.' });
+  }
+  lastDeckPromptAt.set(key, now);
+  if (submit) sendPromptTo(key, text);
+  else pastePromptTo(key, text); // insert at cursor, no Enter
+  reply(204, null);
+});
+
 // Source filter dropdown (cli / desktop / both).
 sourceFilterEl.value = sourceFilter;
 sourceFilterEl.addEventListener('change', () => {
@@ -1034,22 +1262,58 @@ sourceFilterEl.addEventListener('change', () => {
   render();
 });
 
-// Show/hide archived sessions.
-function refreshArchivedToggle() {
-  archivedToggleEl.classList.toggle('active', showArchived);
-  archivedToggleEl.textContent = archived.size ? `archived ${archived.size}` : 'archived';
-  archivedToggleEl.style.display = archived.size || showArchived ? '' : 'none';
+// ---- Titlebar view (eye) dropdown: hide-inactive + hide-archived ----
+function saveViewPrefs() {
+  window.api.saveSettings({ hideInactive, showArchived });
 }
-archivedToggleEl.addEventListener('click', () => {
-  showArchived = !showArchived;
-  refreshArchivedToggle();
+// Sync the menu's checkboxes/labels + the eye's "active" highlight to state.
+function refreshViewMenu() {
+  vmHideInactiveEl.checked = hideInactive;
+  vmHideArchivedEl.checked = !showArchived; // "hide archived" is the inverse of showArchived
+  vmArchivedCountEl.textContent = archived.size ? `(${archived.size})` : '';
+  // Highlight the eye when something non-default is being hidden.
+  const filtering = hideInactive || (archived.size > 0 && !showArchived);
+  viewToggleEl.classList.toggle('active', filtering);
+}
+function setViewMenuOpen(open) {
+  viewMenuEl.classList.toggle('hidden', !open);
+}
+viewToggleEl.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setViewMenuOpen(viewMenuEl.classList.contains('hidden'));
+});
+// Click anywhere else closes the menu (but not clicks inside it).
+document.addEventListener('click', (e) => {
+  if (!viewMenuEl.classList.contains('hidden') && !e.target.closest('#view-menu-wrap')) {
+    setViewMenuOpen(false);
+  }
+});
+vmHideInactiveEl.addEventListener('change', () => {
+  hideInactive = vmHideInactiveEl.checked;
+  saveViewPrefs();
+  refreshViewMenu();
+  render();
+});
+vmHideArchivedEl.addEventListener('change', () => {
+  showArchived = !vmHideArchivedEl.checked; // checked = hide archived
+  saveViewPrefs();
+  refreshViewMenu();
   render();
 });
 
 // Text search (drives both list and grid).
 searchEl.addEventListener('input', () => {
   searchQuery = searchEl.value;
+  searchClearEl.classList.toggle('hidden', !searchEl.value);
   render();
+});
+// The little × clears the box and refocuses it.
+searchClearEl.addEventListener('click', () => {
+  searchEl.value = '';
+  searchQuery = '';
+  searchClearEl.classList.add('hidden');
+  render();
+  searchEl.focus();
 });
 
 // Grid-mode toggle (full-window card overview).
@@ -1070,7 +1334,38 @@ function setFontSize(px) {
     if (!e.isLog) e.term.options.fontSize = termFontSize;
   }
   if (activePtyId != null) fitActive(activePtyId);
+  if (stSizeEl) stSizeEl.value = termFontSize; // keep the settings modal in sync
 }
+
+// ---------- Settings modal (⚙) ----------
+const settingsToggleEl = document.getElementById('settings-toggle');
+const settingsModalEl = document.getElementById('settings-modal');
+const stCloseEl = document.getElementById('st-close');
+const stThemeEl = document.getElementById('st-theme');
+const stFontEl = document.getElementById('st-font');
+const stSizeEl = document.getElementById('st-size');
+
+function openSettingsModal() {
+  stThemeEl.value = uiTheme;
+  stFontEl.value = termFontFamily;
+  stSizeEl.value = termFontSize;
+  settingsModalEl.classList.remove('hidden');
+}
+settingsToggleEl.addEventListener('click', openSettingsModal);
+stCloseEl.addEventListener('click', () => settingsModalEl.classList.add('hidden'));
+settingsModalEl.addEventListener('click', (e) => {
+  if (e.target === settingsModalEl) settingsModalEl.classList.add('hidden');
+});
+stThemeEl.addEventListener('change', () => setTheme(stThemeEl.value));
+stFontEl.addEventListener('change', () => {
+  setTermFont(stFontEl.value);
+  stFontEl.value = termFontFamily; // show the normalized stack that was applied
+});
+stSizeEl.addEventListener('change', () => {
+  const v = parseInt(stSizeEl.value, 10);
+  if (!Number.isNaN(v)) setFontSize(v);
+  else stSizeEl.value = termFontSize;
+});
 window.addEventListener('keydown', (e) => {
   if (!isZoomKey(e)) return;
   e.preventDefault();
@@ -1083,14 +1378,19 @@ setFontSize(termFontSize); // apply default until disk settings load
 window.api.loadSettings().then((s) => {
   if (!s) return;
   if (typeof s.fontSize === 'number') setFontSize(s.fontSize);
+  if (typeof s.termFont === 'string' && s.termFont) setTermFont(s.termFont);
+  if (s.theme === 'light') setTheme('light');
   if (Array.isArray(s.bookmarks)) bookmarks = s.bookmarks;
   if (Array.isArray(s.archived)) archived = new Set(s.archived);
+  if (typeof s.hideInactive === 'boolean') hideInactive = s.hideInactive;
+  if (typeof s.showArchived === 'boolean') showArchived = s.showArchived;
   if (Array.isArray(s.groups)) groups = s.groups;
   renderBookmarkSelect();
-  refreshArchivedToggle();
+  publishBookmarks(); // expose saved prompts to the deck API
+  refreshViewMenu();
   render();
 });
-refreshArchivedToggle();
+refreshViewMenu();
 
 // ---------- Prompt queue ----------
 function activeTermEntry() {
@@ -1290,6 +1590,22 @@ window.addEventListener('beforeunload', () => window.api.saveQueuesSync(queues))
 // ---------- Bookmarks (saved/reusable prompts) ----------
 function saveBookmarks() {
   window.api.saveSettings({ bookmarks });
+  publishBookmarks();
+}
+// Mirror saved prompts to the main process for GET /api/bookmarks.
+function publishBookmarks() {
+  window.api.publishBookmarks(
+    bookmarks.map((b) => ({
+      id: b.id,
+      name: b.name,
+      text: b.text,
+      // user's intent on tap: submit immediately vs paste for editing. Default
+      // true (existing bookmarks submit); a bookmark can opt out. JSON drops
+      // `category` when empty, so the deck falls back to a flat list.
+      submit_default: b.submit !== false,
+      category: (b.category || '').trim() || undefined,
+    }))
+  );
 }
 function newBookmarkId() {
   return 'bm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -1338,6 +1654,29 @@ function renderBookmarkModal() {
       saveBookmarks();
       renderBookmarkSelect();
     });
+    const cat = document.createElement('input');
+    cat.className = 'bm-row-cat';
+    cat.placeholder = 'category';
+    cat.value = b.category || '';
+    cat.title = 'Optional group for the deck (e.g. Reviews, Templates)';
+    cat.addEventListener('input', () => {
+      bookmarks[i].category = cat.value;
+      saveBookmarks();
+    });
+    const submitLbl = document.createElement('label');
+    submitLbl.className = 'bm-row-submit';
+    submitLbl.title = 'When fired from the deck: submit immediately (on) vs paste for editing (off)';
+    const submitCb = document.createElement('input');
+    submitCb.type = 'checkbox';
+    submitCb.checked = b.submit !== false; // default on
+    submitCb.addEventListener('change', () => {
+      bookmarks[i].submit = submitCb.checked;
+      saveBookmarks();
+    });
+    const submitTxt = document.createElement('span');
+    submitTxt.textContent = 'submit';
+    submitLbl.appendChild(submitCb);
+    submitLbl.appendChild(submitTxt);
     const del = document.createElement('button');
     del.className = 'bm-row-del';
     del.textContent = 'delete';
@@ -1348,6 +1687,8 @@ function renderBookmarkModal() {
       renderBookmarkModal();
     });
     top.appendChild(name);
+    top.appendChild(cat);
+    top.appendChild(submitLbl);
     top.appendChild(del);
     const text = document.createElement('textarea');
     text.className = 'bm-row-text';
