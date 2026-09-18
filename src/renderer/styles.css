@@ -231,7 +231,7 @@ body { display: flex; flex-direction: column; }
 /* right-click context menu */
 #context-menu {
   position: fixed;
-  z-index: 150; /* above the view-menu dropdown (120) — both can be open at once */
+  z-index: 150; /* above every overlay (grid 10 / board 20 / usage 25 / modals 50-60) */
   background: var(--panel-2);
   border: 1px solid var(--border-2);
   min-width: 120px;
