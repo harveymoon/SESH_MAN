@@ -1685,6 +1685,7 @@ function updatePaneHeader() {
   paintPaneHeader();
   updateQueueTarget();
   renderQueue();
+  syncInsight(); // retarget the insight pane to the newly focused session
 }
 
 // Fit + resize a terminal, but ONLY when its pane is actually visible.
@@ -2207,6 +2208,188 @@ queueToggleEl.addEventListener('click', () => {
 if (localStorage.getItem('seshman.queueOpen') === '1') {
   queuePaneEl.classList.remove('collapsed');
   queueToggleEl.classList.add('active');
+}
+
+// ---------- Insight pane ----------
+// The transcript layers the terminal hides, for the ACTIVE session: latest
+// TodoWrite list, thinking blocks, the tool-call feed (with results),
+// subagent launches, and the session's MCP servers + hooks. Fed by a single
+// main-process tail-watcher that retargets when the focused session changes.
+const insightToggleEl = document.getElementById('insight-toggle');
+const insightPaneEl = document.getElementById('insight-pane');
+const insightSessionEl = document.getElementById('insight-session');
+const inTodosWrapEl = document.getElementById('in-todos-wrap');
+const inTodosEl = document.getElementById('in-todos');
+const inThinkEl = document.getElementById('in-think');
+const inThinkCountEl = document.getElementById('in-think-count');
+const inToolsEl = document.getElementById('in-tools');
+const inToolsCountEl = document.getElementById('in-tools-count');
+const inAgentsWrapEl = document.getElementById('in-agents-wrap');
+const inAgentsEl = document.getElementById('in-agents');
+const inAgentsCountEl = document.getElementById('in-agents-count');
+const inEnvEl = document.getElementById('in-env');
+
+let lastInsightSid = null;
+
+function insightOpenNow() {
+  return !insightPaneEl.classList.contains('collapsed');
+}
+
+function clearInsight() {
+  inTodosEl.innerHTML = '';
+  inThinkEl.innerHTML = '';
+  inToolsEl.innerHTML = '';
+  inAgentsEl.innerHTML = '';
+  inEnvEl.innerHTML = '';
+  inThinkCountEl.textContent = '';
+  inToolsCountEl.textContent = '';
+  inAgentsCountEl.textContent = '';
+}
+
+const TODO_GLYPH = { completed: '✓', in_progress: '▸', pending: '○' };
+
+function renderInsightState(s) {
+  // todos (hidden when the session never used TodoWrite)
+  inTodosWrapEl.classList.toggle('hidden', !s.todos.length);
+  inTodosEl.innerHTML = '';
+  for (const t of s.todos) {
+    const row = document.createElement('div');
+    row.className = 'in-todo ' + (t.status || 'pending');
+    const g = document.createElement('span');
+    g.className = 'in-todo-glyph';
+    g.textContent = TODO_GLYPH[t.status] || '○';
+    const txt = document.createElement('span');
+    txt.textContent = t.content;
+    row.appendChild(g);
+    row.appendChild(txt);
+    inTodosEl.appendChild(row);
+  }
+
+  // thinking (newest last; sessions without visible thinking say so)
+  inThinkCountEl.textContent = s.counts.thinking ? '×' + s.counts.thinking : '';
+  inThinkEl.innerHTML = '';
+  if (!s.thinking.length) {
+    inThinkEl.innerHTML = '<div class="in-empty">no visible thinking recorded</div>';
+  }
+  for (const t of s.thinking) {
+    const b = document.createElement('div');
+    b.className = 'in-think-block' + (t.side ? ' side' : '');
+    const head = document.createElement('div');
+    head.className = 'in-row-head';
+    head.textContent = (t.side ? 'subagent · ' : '') + relTime(t.ts);
+    const body = document.createElement('div');
+    body.className = 'in-think-text';
+    body.textContent = t.text;
+    b.appendChild(head);
+    b.appendChild(body);
+    inThinkEl.appendChild(b);
+  }
+  inThinkEl.scrollTop = inThinkEl.scrollHeight;
+
+  // tool feed (newest last, auto-scrolled)
+  inToolsCountEl.textContent = s.counts.tools ? '×' + s.counts.tools : '';
+  inToolsEl.innerHTML = '';
+  if (!s.tools.length) inToolsEl.innerHTML = '<div class="in-empty">no tool calls yet</div>';
+  for (const t of s.tools) {
+    const row = document.createElement('div');
+    row.className = 'in-tool ' + t.status + (t.side ? ' side' : '');
+    const dot = document.createElement('span');
+    dot.className = 'in-dot';
+    const name = document.createElement('span');
+    name.className = 'in-tool-name';
+    name.textContent = t.name;
+    const det = document.createElement('span');
+    det.className = 'in-tool-detail';
+    det.textContent = t.detail;
+    row.title = (t.detail || t.name) + (t.err ? '\nerror: ' + t.err : '');
+    row.appendChild(dot);
+    row.appendChild(name);
+    row.appendChild(det);
+    inToolsEl.appendChild(row);
+  }
+  inToolsEl.scrollTop = inToolsEl.scrollHeight;
+
+  // subagents
+  inAgentsWrapEl.classList.toggle('hidden', !s.agents.length);
+  inAgentsCountEl.textContent = s.counts.agents ? '×' + s.counts.agents : '';
+  inAgentsEl.innerHTML = '';
+  for (const a of s.agents) {
+    const row = document.createElement('div');
+    row.className = 'in-agent';
+    const type = document.createElement('span');
+    type.className = 'in-agent-type';
+    type.textContent = a.type || 'agent';
+    const desc = document.createElement('span');
+    desc.className = 'in-agent-desc';
+    desc.textContent = a.desc;
+    row.appendChild(type);
+    row.appendChild(desc);
+    inAgentsEl.appendChild(row);
+  }
+}
+
+function renderInsightEnv(env) {
+  inEnvEl.innerHTML = '';
+  if (!env || (!env.mcp.length && !env.hooks.length)) {
+    inEnvEl.innerHTML = '<div class="in-empty">no MCP servers or hooks configured</div>';
+    return;
+  }
+  for (const m of env.mcp) {
+    const chip = document.createElement('span');
+    chip.className = 'in-chip';
+    chip.textContent = m.name;
+    chip.title = 'MCP server (' + m.scope + ')';
+    inEnvEl.appendChild(chip);
+  }
+  for (const h of env.hooks) {
+    const chip = document.createElement('span');
+    chip.className = 'in-chip hook';
+    chip.textContent = h.event + (h.count > 1 ? ' ×' + h.count : '');
+    chip.title = 'hook (' + h.scope + ')';
+    inEnvEl.appendChild(chip);
+  }
+}
+
+// Follow the active pane's session. Called on focus/close (updatePaneHeader).
+async function syncInsight() {
+  if (!insightOpenNow()) return;
+  const entry = activePtyId != null ? terms.get(activePtyId) : null;
+  const sid = entry && entry.sessionId;
+  insightSessionEl.textContent = entry ? entry.label : '';
+  if (!sid) {
+    lastInsightSid = null;
+    window.api.closeInsight();
+    clearInsight();
+    return;
+  }
+  if (sid === lastInsightSid) return;
+  lastInsightSid = sid;
+  clearInsight();
+  const live = latestSessions.find((x) => x.sessionId === sid);
+  const res = await window.api.openInsight(sid, (live && live.cwd) || '');
+  if (!res || lastInsightSid !== sid) return; // switched again mid-flight
+  renderInsightEnv(res.env);
+  renderInsightState(res.state);
+}
+
+window.api.onInsightData((snap) => {
+  if (insightOpenNow() && snap && snap.sessionId === lastInsightSid) renderInsightState(snap);
+});
+
+insightToggleEl.addEventListener('click', () => {
+  const open = !insightPaneEl.classList.toggle('collapsed');
+  insightToggleEl.classList.toggle('active', open);
+  localStorage.setItem('seshman.insightOpen', open ? '1' : '0');
+  if (open) syncInsight();
+  else {
+    window.api.closeInsight();
+    lastInsightSid = null;
+  }
+  if (activePtyId != null) requestAnimationFrame(() => fitActive(activePtyId)); // main width changed
+});
+if (localStorage.getItem('seshman.insightOpen') === '1') {
+  insightPaneEl.classList.remove('collapsed');
+  insightToggleEl.classList.add('active');
 }
 // Load persisted queues from disk, then render.
 window.api.loadQueues().then((data) => {

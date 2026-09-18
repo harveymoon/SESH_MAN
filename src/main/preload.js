@@ -60,6 +60,11 @@ contextBridge.exposeInMainWorld('api', {
   // Raise the window (desktop-notification click)
   focusWindow: () => ipcRenderer.send('window:focus'),
 
+  // Insight pane (thinking / tools / todos / subagents / env for one session)
+  openInsight: (sessionId, cwd) => ipcRenderer.invoke('insight:open', { sessionId, cwd }),
+  closeInsight: () => ipcRenderer.send('insight:close'),
+  onInsightData: (cb) => ipcRenderer.on('insight:data', (_evt, snap) => cb(snap)),
+
   // Agent bulletin board (local files)
   boardList: () => ipcRenderer.invoke('bulletin:list'),
   boardPost: (note) => ipcRenderer.invoke('bulletin:post', note),

@@ -37,6 +37,7 @@
       <button id="board-toggle" title="Agent bulletin board">▤ board</button>
       <button id="usage-toggle" title="Token usage (from local transcripts)">▦ usage</button>
       <button id="shots-toggle" title="Insert a recent screenshot into the active session">▧ shots</button>
+      <button id="insight-toggle" title="Insight: thinking, tools, todos, subagents">◫ insight</button>
       <button id="queue-toggle" title="Prompt queue">queue</button>
       <div class="winctrl-spacer"></div>
     </div>
@@ -88,6 +89,35 @@
           </div>
         </div>
       </main>
+
+      <aside id="insight-pane" class="collapsed">
+        <header id="insight-header">
+          <span class="queue-title">Insight</span>
+          <span id="insight-session"></span>
+        </header>
+        <div id="insight-body">
+          <div class="in-section" id="in-todos-wrap">
+            <div class="in-h">todos</div>
+            <div id="in-todos"></div>
+          </div>
+          <div class="in-section" id="in-think-wrap">
+            <div class="in-h">thinking <span id="in-think-count" class="in-count"></span></div>
+            <div id="in-think"></div>
+          </div>
+          <div class="in-section" id="in-tools-wrap">
+            <div class="in-h">tools <span id="in-tools-count" class="in-count"></span></div>
+            <div id="in-tools"></div>
+          </div>
+          <div class="in-section" id="in-agents-wrap">
+            <div class="in-h">subagents <span id="in-agents-count" class="in-count"></span></div>
+            <div id="in-agents"></div>
+          </div>
+          <div class="in-section">
+            <div class="in-h">mcp · hooks</div>
+            <div id="in-env"></div>
+          </div>
+        </div>
+      </aside>
 
       <aside id="queue-pane" class="collapsed">
         <header id="queue-header">

@@ -7,6 +7,7 @@ const { SessionWatcher, findTranscript, readTranscriptMessages } = require('./se
 const { PtyManager } = require('./ptyManager');
 const apiServer = require('./apiServer');
 const bulletinStore = require('./bulletinStore');
+const insightWatcher = require('./insightWatcher');
 
 // Live read-only transcript views: sessionId -> { watcher, debounce }.
 const transcriptWatchers = new Map();
@@ -437,6 +438,15 @@ ipcMain.on('transcript:close', (_evt, sessionId) => closeTranscriptWatcher(sessi
 // Clicking a desktop notification raises the window.
 ipcMain.on('window:focus', () => raiseWindow());
 
+// ---- IPC: insight pane (thinking / tools / todos / subagents for one session) ----
+ipcMain.handle('insight:open', (_evt, p) => {
+  if (!p || typeof p !== 'object' || !isValidSessionId(p.sessionId)) return null;
+  return insightWatcher.openInsight(p.sessionId, p.cwd, (snap) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('insight:data', snap);
+  });
+});
+ipcMain.on('insight:close', () => insightWatcher.closeInsight());
+
 // Single instance: a second launch quits immediately and just focuses the
 // existing window (also avoids fighting over the API port 7374).
 if (!app.requestSingleInstanceLock()) {
@@ -455,6 +465,7 @@ app.on('window-all-closed', () => {
   watcher.stop();
   closeAllTranscriptWatchers();
   bulletinStore.close();
+  insightWatcher.closeInsight();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -463,6 +474,7 @@ app.on('before-quit', () => {
   watcher.stop();
   closeAllTranscriptWatchers();
   bulletinStore.close();
+  insightWatcher.closeInsight();
   if (api) {
     try {
       api.close();
