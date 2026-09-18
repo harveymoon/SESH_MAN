@@ -5,8 +5,10 @@
 // UI can degrade gracefully (the LAN host is often unreachable).
 const http = require('http');
 
-// Override via env if the logger moves.
-const HISTORY_BASE = process.env.AGENTCHAT_HISTORY_API || 'http://192.168.1.161:4444';
+// The NanoClaw dashboard logger is bound to LOOPBACK on the dashboard host
+// (to avoid WSL->LAN port-forwarding), so it only answers on 127.0.0.1 — the
+// same default the agent-chat skill uses. Override via env if it moves.
+const HISTORY_BASE = process.env.AGENTCHAT_HISTORY_API || 'http://127.0.0.1:4444';
 
 function fetchHistory(group, limit = 200) {
   return new Promise((resolve) => {
