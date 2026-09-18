@@ -196,8 +196,9 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
 }
-#settings-toggle { margin-left: auto; } /* anchors the titlebar's right cluster (eye moved to sidebar) */
+#notify-toggle { margin-left: auto; } /* anchors the titlebar's right cluster */
 #view-toggle,
+#notify-toggle,
 #settings-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
@@ -210,9 +211,12 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 #view-toggle:hover,
+#notify-toggle:hover,
 #settings-toggle:hover { color: var(--text); border-color: var(--accent); }
-/* highlighted whenever a non-default filter is hiding sessions */
-#view-toggle.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+/* eye: highlighted whenever a non-default filter is hiding sessions.
+   bell: highlighted while desktop notifications are ON. */
+#view-toggle.active,
+#notify-toggle.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 #view-menu {
   position: absolute;
   top: calc(100% + 4px);

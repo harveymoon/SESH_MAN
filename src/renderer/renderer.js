@@ -393,6 +393,43 @@ function buildDeckSnapshot() {
   };
 }
 
+// ---------- Desktop notifications (bell toggle in the titlebar) ----------
+// Native toasts for "needs your answer" and "finished its turn", ONLY while
+// the seshMan window is unfocused (the in-app pulses cover the focused case).
+// Edge-triggered with a per-session cooldown so nothing spams.
+const notifyToggleEl = document.getElementById('notify-toggle');
+let notifyEnabled = localStorage.getItem('seshman.notify') !== '0'; // default on
+let busyLastTick = new Set(); // sessionIds busy on the previous update tick
+const lastNotifyAt = new Map(); // sessionId -> ts (30s cooldown)
+
+function refreshNotifyToggle() {
+  notifyToggleEl.classList.toggle('active', notifyEnabled);
+  notifyToggleEl.title = 'Desktop notifications: ' + (notifyEnabled ? 'on' : 'off');
+}
+notifyToggleEl.addEventListener('click', () => {
+  notifyEnabled = !notifyEnabled;
+  localStorage.setItem('seshman.notify', notifyEnabled ? '1' : '0');
+  refreshNotifyToggle();
+});
+refreshNotifyToggle();
+
+function maybeNotify(session, body) {
+  if (!notifyEnabled || !session) return;
+  if (document.hasFocus()) return; // you're already looking at seshMan
+  const now = Date.now();
+  if (now - (lastNotifyAt.get(session.sessionId) || 0) < 30000) return;
+  lastNotifyAt.set(session.sessionId, now);
+  try {
+    const n = new Notification(displayTitle(session), { body });
+    n.onclick = () => {
+      window.api.focusWindow();
+      openSession(session);
+    };
+  } catch (_) {
+    /* notifications unavailable on this system */
+  }
+}
+
 // Master render: refresh whichever views are visible.
 function render() {
   const shown = applyFilters(latestSessions);
@@ -409,6 +446,16 @@ function render() {
 function update(sessions) {
   latestSessions = sessions;
   const activeId = activeSessionId();
+  // Desktop notification on busy -> ready transitions (edge-triggered).
+  const nextBusy = new Set();
+  for (const s of sessions) {
+    const nowBusy = s.running && s.status === 'busy';
+    if (nowBusy) nextBusy.add(s.sessionId);
+    else if (s.running && busyLastTick.has(s.sessionId)) {
+      maybeNotify(s, 'Finished its turn — your move');
+    }
+  }
+  busyLastTick = nextBusy;
   for (const s of sessions) {
     // Baseline newly-seen sessions to "read" (so first sight doesn't pulse).
     if (viewed[s.sessionId] == null) viewed[s.sessionId] = activityFor(s);
@@ -1646,6 +1693,12 @@ function scanPrompt(id) {
   if (now !== entry.needsInput) {
     entry.needsInput = now; // flip → repaint the sidebar/grid highlight
     render();
+    if (now && entry.sessionId) {
+      maybeNotify(
+        latestSessions.find((s) => s.sessionId === entry.sessionId),
+        'Blocked on a question — needs your answer'
+      );
+    }
   }
 }
 

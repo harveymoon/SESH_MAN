@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('api', {
   // Folder picker for a new session
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
 
+  // Raise the window (desktop-notification click)
+  focusWindow: () => ipcRenderer.send('window:focus'),
+
   // Agent bulletin board (local files)
   boardList: () => ipcRenderer.invoke('bulletin:list'),
   boardPost: (note) => ipcRenderer.invoke('bulletin:post', note),

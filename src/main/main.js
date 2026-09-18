@@ -113,6 +113,14 @@ if (process.platform === 'win32') app.setAppUserModelId('com.harveymoon.seshman'
 app.on('child-process-gone', (_e, details) => logLine('CHILD gone: ' + JSON.stringify(details)));
 
 let mainWindow = null;
+
+// Restore + surface + focus the window (deck focus, second launch, toast click).
+function raiseWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
 let rendererCrashes = []; // timestamps of recent renderer crashes (reload-loop guard)
 const watcher = new SessionWatcher({ pollMs: 1500 });
 const ptys = new PtyManager();
@@ -205,9 +213,7 @@ function createWindow() {
       onFocus: (id) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         mainWindow.webContents.send('deck:focus', id);
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.show();
-        mainWindow.focus();
+        raiseWindow();
       },
       log: logLine,
     });
@@ -389,19 +395,15 @@ ipcMain.on('settings:save', (_evt, partial) => {
 });
 
 ipcMain.on('transcript:close', (_evt, sessionId) => closeTranscriptWatcher(sessionId));
+// Clicking a desktop notification raises the window.
+ipcMain.on('window:focus', () => raiseWindow());
 
 // Single instance: a second launch quits immediately and just focuses the
 // existing window (also avoids fighting over the API port 7374).
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
+  app.on('second-instance', () => raiseWindow());
   app.whenReady().then(createWindow);
 }
 
