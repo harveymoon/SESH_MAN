@@ -1595,9 +1595,12 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     // Typing into the pane = you're answering the prompt → clear the flag now
     // (the next buffer scan confirms it once the prompt clears from screen).
     const e = terms.get(ptyId);
-    if (e && e.needsInput) {
-      e.needsInput = false;
-      render();
+    if (e) {
+      e.lastTypedAt = Date.now(); // suppresses prompt-detection while typing
+      if (e.needsInput) {
+        e.needsInput = false;
+        render();
+      }
     }
     window.api.sendInput(ptyId, data);
   });
@@ -1845,6 +1848,14 @@ function scanPrompt(id) {
   if (!entry || entry.isLog || entry.exited) return;
   const tail = readBufferTail(entry.term);
   const now = PROMPT_PATTERNS.some((re) => re.test(tail));
+  // Never RAISE the flag while the user is actively typing in this pane:
+  // their own input echo can match the prompt patterns ("do you want to…"),
+  // which alternated with onData's clear into a per-keystroke flash. A real
+  // blocking prompt is read while NOT typing — a 1.5s pause still detects it.
+  if (now && !entry.needsInput && Date.now() - (entry.lastTypedAt || 0) < 1500) {
+    schedulePromptScan(id); // re-check once the pause is long enough
+    return;
+  }
   if (now !== entry.needsInput) {
     entry.needsInput = now; // flip → repaint the sidebar/grid highlight
     render();
