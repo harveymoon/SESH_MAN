@@ -111,6 +111,13 @@ body { display: flex; flex-direction: column; }
 }
 #search-clear:hover { color: var(--text); }
 #search-clear.hidden { display: none; }
+/* running · total · waiting readout, beside the search bar */
+#session-count {
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
 #grid-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
@@ -162,11 +169,6 @@ body { display: flex; flex-direction: column; }
   justify-content: space-between;
   gap: 8px;
 }
-#sidebar-header .subtitle {
-  font-size: 9.5px;
-  color: var(--muted);
-  letter-spacing: 0.04em;
-}
 #source-filter,
 #sort-mode {
   background: var(--panel-2);
@@ -187,14 +189,13 @@ body { display: flex; flex-direction: column; }
 
 .hdr-controls { display: flex; align-items: center; gap: 6px; }
 
-/* ---- Titlebar view (eye) dropdown — governs both sidebar list and grid ---- */
+/* ---- Sidebar view (eye) dropdown — governs both sidebar list and grid ---- */
 #view-menu-wrap {
-  -webkit-app-region: no-drag;
   position: relative;
-  margin-left: auto; /* push the eye + grid + queue cluster to the right */
   display: flex;
   align-items: center;
 }
+#settings-toggle { margin-left: auto; } /* anchors the titlebar's right cluster (eye moved to sidebar) */
 #view-toggle,
 #settings-toggle {
   -webkit-app-region: no-drag;
