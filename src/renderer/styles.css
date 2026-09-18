@@ -1433,3 +1433,41 @@ body.resizing #queue-resize { background: var(--accent); opacity: 0.5; }
   outline: none;
 }
 #pm-text:focus { border-color: var(--accent); }
+
+/* ---- "you asked" banner: last typed prompt, shown only while off-screen ---- */
+.user-echo {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 14px; /* clear the scrollbar */
+  z-index: 4;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 9px;
+  background: color-mix(in srgb, var(--panel-2) 92%, transparent);
+  border-bottom: 1px solid var(--border-2);
+  border-left: 2px solid var(--accent);
+  cursor: pointer;
+}
+.user-echo-tag {
+  flex: none;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.user-echo-text {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap; /* one line until expanded */
+}
+.user-echo.expanded .user-echo-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.user-echo:hover .user-echo-text { color: var(--text); }

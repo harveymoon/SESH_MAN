@@ -1511,7 +1511,48 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     const b = term.buffer.active;
     jump.classList.toggle('hidden', b.viewportY >= b.baseY);
   };
-  term.onScroll(updateJump);
+
+  // "you asked" banner: pins your LAST TYPED PROMPT to the top of the pane,
+  // but only while that text is NOT somewhere in the visible viewport (so it
+  // never doubles what you can already read). Click toggles the full text.
+  const echo = document.createElement('div');
+  echo.className = 'user-echo hidden';
+  const echoTag = document.createElement('span');
+  echoTag.className = 'user-echo-tag';
+  echoTag.textContent = 'you asked';
+  const echoText = document.createElement('span');
+  echoText.className = 'user-echo-text';
+  echo.appendChild(echoTag);
+  echo.appendChild(echoText);
+  echo.addEventListener('click', () => echo.classList.toggle('expanded'));
+  pane.appendChild(echo);
+  const normWs = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const updateEcho = () => {
+    const entry = terms.get(ptyId);
+    const msg = (entry && entry.lastUserMsg) || '';
+    if (!msg) {
+      echo.classList.add('hidden');
+      return;
+    }
+    if (echoText.textContent !== msg) echoText.textContent = msg;
+    // Scan the visible rows for a distinctive prefix of the prompt (whitespace-
+    // collapsed so wrapping doesn't break the match).
+    const probe = normWs(msg).slice(0, 40);
+    const b = term.buffer.active;
+    let visibleText = '';
+    for (let y = b.viewportY; y < b.viewportY + term.rows; y++) {
+      const line = b.getLine(y);
+      if (line) visibleText += line.translateToString(true) + ' ';
+    }
+    const onScreen = probe.length >= 4 && normWs(visibleText).includes(probe);
+    echo.classList.toggle('hidden', onScreen);
+    if (onScreen) echo.classList.remove('expanded');
+  };
+  const updateOverlays = () => {
+    updateJump();
+    updateEcho();
+  };
+  term.onScroll(updateOverlays);
 
   // Spawning the pty can fail (claude not on PATH, ConPTY init error). If it
   // does, tear down the half-built pane/terminal and show the error inline
@@ -1628,7 +1669,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   });
 
   const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false, color: sessColor };
-  entry.updateJump = updateJump; // re-checked after writes (see onPtyData)
+  entry.updateOverlays = updateOverlays; // re-checked after writes (see onPtyData)
   terms.set(ptyId, entry);
   if (sessionId) sessionToPty.set(sessionId, ptyId);
 
@@ -1659,6 +1700,12 @@ function refreshEntryLabels() {
       if (color !== e.color) {
         e.color = color;
         if (!e.isLog && e.term) e.term.options.theme = themedFor(color);
+      }
+      // Keep the "you asked" banner fed with the latest typed prompt.
+      const lu = s.lastUserPrompt || '';
+      if (lu !== e.lastUserMsg) {
+        e.lastUserMsg = lu;
+        if (e.updateOverlays) e.updateOverlays();
       }
     }
   }
@@ -1820,9 +1867,9 @@ function schedulePromptScan(id) {
 window.api.onPtyData(({ id, data }) => {
   const entry = terms.get(id);
   if (entry && !entry.isLog) {
-    // The callback runs after xterm has parsed the chunk, so the jump-button
-    // check sees the post-write viewport/base positions.
-    entry.term.write(data, () => entry.updateJump && entry.updateJump());
+    // The callback runs after xterm has parsed the chunk, so the overlay
+    // checks see the post-write viewport/base positions.
+    entry.term.write(data, () => entry.updateOverlays && entry.updateOverlays());
     schedulePromptScan(id);
   }
 });

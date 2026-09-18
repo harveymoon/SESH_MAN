@@ -150,6 +150,7 @@ function newTranscriptMeta() {
     // to read — so a read session won't re-notify after a background write.
     lastMessageActivity: 0,
     lastMessage: null, // { role, text } of the most recent user/assistant message
+    lastUserPrompt: '', // the most recent TYPED user prompt (no tool results/meta)
     model: '', // model id from the most recent assistant turn (e.g. claude-fable-5)
     color: null, // named color from the last /color command (red, purple, ...)
     // Token usage totals (from assistant records' usage blocks) and per-local-
@@ -195,6 +196,12 @@ function applyTranscriptLines(meta, text) {
       // Cap the preview: it rides every scan diff + IPC push, and the UI clamps
       // to a few lines anyway.
       if (text2 && text2.trim()) meta.lastMessage = { role: r.type, text: text2.trim().slice(0, 500) };
+      // Your last actual request (drives the "you asked" pane banner). Skip
+      // injected wrappers (<system-reminder>, <command-name>, [Request interrupted).
+      if (r.type === 'user' && text2) {
+        const t = text2.trim();
+        if (t && t[0] !== '<' && t[0] !== '[') meta.lastUserPrompt = t.slice(0, 2000);
+      }
       if (r.timestamp) {
         const mt = Date.parse(r.timestamp);
         if (mt > meta.lastMessageActivity) meta.lastMessageActivity = mt;
@@ -440,6 +447,7 @@ class SessionWatcher extends EventEmitter {
           aiTitle: meta.aiTitle,
           lastPrompt: meta.lastPrompt,
           lastMessage: meta.lastMessage,
+          lastUserPrompt: meta.lastUserPrompt || '',
           messageCount: meta.messageCount,
         });
       }
