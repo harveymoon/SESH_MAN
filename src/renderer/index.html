@@ -235,30 +235,40 @@
           </label>
           <label class="st-row">
             <span class="st-label">terminal font</span>
-            <input id="st-font" type="text" list="st-font-presets" spellcheck="false"
-                   placeholder="Cascadia Code" />
-            <datalist id="st-font-presets">
-              <option value="Cascadia Code"></option>
-              <option value="Cascadia Mono"></option>
-              <option value="Consolas"></option>
-              <option value="JetBrains Mono"></option>
-              <option value="Fira Code"></option>
-              <option value="IBM Plex Mono"></option>
-              <option value="OpenDyslexicMono"></option>
-              <option value="Courier New"></option>
-            </datalist>
+            <select id="st-font-sel">
+              <option value="">default (Cascadia Code)</option>
+              <option value="Cascadia Code">Cascadia Code</option>
+              <option value="Cascadia Mono">Cascadia Mono</option>
+              <option value="Consolas">Consolas</option>
+              <option value="JetBrains Mono">JetBrains Mono</option>
+              <option value="Fira Code">Fira Code</option>
+              <option value="IBM Plex Mono">IBM Plex Mono</option>
+              <option value="OpenDyslexicMono">OpenDyslexicMono</option>
+              <option value="Courier New">Courier New</option>
+              <option value="__custom__">custom…</option>
+            </select>
+          </label>
+          <label class="st-row hidden" id="st-font-custom-row">
+            <span class="st-label"></span>
+            <input id="st-font" type="text" spellcheck="false"
+                   placeholder='custom stack, e.g. "My Font", monospace' />
           </label>
           <label class="st-row">
             <span class="st-label">app font</span>
-            <input id="st-appfont" type="text" list="st-appfont-presets" spellcheck="false"
-                   placeholder="default" />
-            <datalist id="st-appfont-presets">
-              <option value="OpenDyslexic"></option>
-              <option value="OpenDyslexicMono"></option>
-              <option value="Cascadia Code"></option>
-              <option value="Consolas"></option>
-              <option value="Segoe UI"></option>
-            </datalist>
+            <select id="st-appfont-sel">
+              <option value="">default</option>
+              <option value="OpenDyslexic">OpenDyslexic</option>
+              <option value="OpenDyslexicMono">OpenDyslexicMono</option>
+              <option value="Cascadia Code">Cascadia Code</option>
+              <option value="Consolas">Consolas</option>
+              <option value="Segoe UI">Segoe UI</option>
+              <option value="__custom__">custom…</option>
+            </select>
+          </label>
+          <label class="st-row hidden" id="st-appfont-custom-row">
+            <span class="st-label"></span>
+            <input id="st-appfont" type="text" spellcheck="false"
+                   placeholder='custom font name or stack' />
           </label>
           <label class="st-row">
             <span class="st-label">terminal font size</span>

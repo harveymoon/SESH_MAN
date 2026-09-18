@@ -2040,14 +2040,40 @@ const settingsToggleEl = document.getElementById('settings-toggle');
 const settingsModalEl = document.getElementById('settings-modal');
 const stCloseEl = document.getElementById('st-close');
 const stThemeEl = document.getElementById('st-theme');
+const stFontSelEl = document.getElementById('st-font-sel');
+const stFontCustomRowEl = document.getElementById('st-font-custom-row');
 const stFontEl = document.getElementById('st-font');
+const stAppFontSelEl = document.getElementById('st-appfont-sel');
+const stAppFontCustomRowEl = document.getElementById('st-appfont-custom-row');
 const stAppFontEl = document.getElementById('st-appfont');
 const stSizeEl = document.getElementById('st-size');
 
+// Reflect the current font into its select: a preset when it matches one,
+// '' for the default, otherwise "custom…" with the free-text row revealed.
+// (A real <select> always shows every option — the old datalist combo
+// filtered suggestions by the field's text, so once a font was chosen the
+// list looked empty and you couldn't change back.)
+function syncFontPicker(selEl, customRowEl, inputEl, currentStack, defaultStack) {
+  let value = '__custom__';
+  if (currentStack === defaultStack) value = '';
+  else {
+    for (const o of selEl.options) {
+      // terminal fonts store the normalized stack; app font stores the raw name
+      if (o.value && o.value !== '__custom__' && (o.value === currentStack || normalizeFontStack(o.value) === currentStack)) {
+        value = o.value;
+        break;
+      }
+    }
+  }
+  selEl.value = value;
+  customRowEl.classList.toggle('hidden', value !== '__custom__');
+  inputEl.value = value === '__custom__' ? currentStack : '';
+}
+
 function openSettingsModal() {
   stThemeEl.value = uiTheme;
-  stFontEl.value = termFontFamily;
-  stAppFontEl.value = appFont;
+  syncFontPicker(stFontSelEl, stFontCustomRowEl, stFontEl, termFontFamily, DEFAULT_TERM_FONT);
+  syncFontPicker(stAppFontSelEl, stAppFontCustomRowEl, stAppFontEl, appFont, '');
   stSizeEl.value = termFontSize;
   settingsModalEl.classList.remove('hidden');
 }
@@ -2057,11 +2083,33 @@ settingsModalEl.addEventListener('click', (e) => {
   if (e.target === settingsModalEl) settingsModalEl.classList.add('hidden');
 });
 stThemeEl.addEventListener('change', () => setTheme(stThemeEl.value));
+stFontSelEl.addEventListener('change', () => {
+  const v = stFontSelEl.value;
+  if (v === '__custom__') {
+    stFontCustomRowEl.classList.remove('hidden');
+    stFontEl.value = termFontFamily;
+    stFontEl.focus();
+    return;
+  }
+  stFontCustomRowEl.classList.add('hidden');
+  setTermFont(v); // '' resets to the default stack
+});
 stFontEl.addEventListener('change', () => {
   setTermFont(stFontEl.value);
   stFontEl.value = termFontFamily; // show the normalized stack that was applied
 });
-stAppFontEl.addEventListener('change', () => setAppFont(stAppFontEl.value)); // empty = default
+stAppFontSelEl.addEventListener('change', () => {
+  const v = stAppFontSelEl.value;
+  if (v === '__custom__') {
+    stAppFontCustomRowEl.classList.remove('hidden');
+    stAppFontEl.value = appFont;
+    stAppFontEl.focus();
+    return;
+  }
+  stAppFontCustomRowEl.classList.add('hidden');
+  setAppFont(v); // '' resets to the built-in UI font
+});
+stAppFontEl.addEventListener('change', () => setAppFont(stAppFontEl.value));
 stSizeEl.addEventListener('change', () => {
   const v = parseInt(stSizeEl.value, 10);
   if (!Number.isNaN(v)) setFontSize(v);
