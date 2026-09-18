@@ -33,7 +33,6 @@ const boardPostEl = document.getElementById('board-post');
 const queuePaneEl = document.getElementById('queue-pane');
 const queueToggleEl = document.getElementById('queue-toggle');
 const queueListEl = document.getElementById('queue-list');
-const queueAddEl = document.getElementById('queue-add');
 const queueTargetEl = document.getElementById('queue-target');
 const bookmarkSelectEl = document.getElementById('bookmark-select');
 const bookmarkManageEl = document.getElementById('bookmark-manage');
@@ -1623,33 +1622,46 @@ function renderQueue() {
   queueListEl.innerHTML = '';
   const sid = currentSessionId();
   if (!sid) {
-    queueAddEl.disabled = true;
     queueListEl.innerHTML = '<div class="queue-empty">Open a session to queue prompts for it.</div>';
     return;
   }
-  queueAddEl.disabled = false;
   const canSend = !!activeTermEntry(); // only hosted terminals can receive input
   const list = queues[sid] || [];
-  if (!list.length) {
-    queueListEl.innerHTML =
-      '<div class="queue-empty">No queued prompts for this session.<br>Hit “+ add”.</div>';
-    return;
-  }
-  list.forEach((text, i) => {
+  list.forEach((text, i) => queueListEl.appendChild(buildQueueItem(sid, i, text, canSend, false)));
+  // The queue always ends with one empty DRAFT slot — typing into it queues
+  // the text immediately (no add button) and grows a fresh slot below.
+  queueListEl.appendChild(buildQueueItem(sid, list.length, '', canSend, true));
+}
+
+function buildQueueItem(sid, i, text, canSend, isDraft) {
+  {
     const item = document.createElement('div');
-    item.className = 'queue-item';
+    item.className = 'queue-item' + (isDraft ? ' draft' : '');
 
     const ta = document.createElement('textarea');
     ta.className = 'queue-text';
     ta.value = text;
-    ta.placeholder = 'Write a prompt…';
+    ta.placeholder = isDraft ? 'Write a prompt… (queues as you type)' : 'Write a prompt…';
     ta.rows = 1;
     const autoGrow = () => {
       ta.style.height = 'auto';
       ta.style.height = ta.scrollHeight + 'px';
     };
     ta.addEventListener('input', () => {
-      queues[sid][i] = ta.value;
+      if (!queues[sid]) queues[sid] = [];
+      if (item.classList.contains('draft')) {
+        if (!ta.value) {
+          autoGrow();
+          return; // still an empty draft
+        }
+        // First keystroke promotes the draft to a real queue item IN PLACE
+        // (no re-render, so the caret stays) and grows a new draft below.
+        item.classList.remove('draft');
+        queues[sid].push(ta.value);
+        queueListEl.appendChild(buildQueueItem(sid, queues[sid].length, '', !!activeTermEntry(), true));
+      } else {
+        queues[sid][i] = ta.value;
+      }
       saveQueues();
       autoGrow();
     });
@@ -1717,6 +1729,7 @@ function renderQueue() {
     del.className = 'q-del';
     del.textContent = 'delete';
     del.addEventListener('click', () => {
+      if (item.classList.contains('draft')) return; // draft isn't in the array
       queues[sid].splice(i, 1);
       saveQueues();
       renderQueue();
@@ -1727,6 +1740,7 @@ function renderQueue() {
     send.disabled = !canSend; // read-only/no session: draft only
     send.title = canSend ? 'Send to the active session' : 'Resume the session to send';
     send.addEventListener('click', () => {
+      if (item.classList.contains('draft')) return; // draft isn't in the array
       if (sendPrompt(ta.value)) {
         queues[sid].splice(i, 1);
         saveQueues();
@@ -1738,9 +1752,9 @@ function renderQueue() {
     actions.appendChild(send);
     item.appendChild(ta);
     item.appendChild(actions);
-    queueListEl.appendChild(item);
-    autoGrow(); // size to fit existing content now that it's in the DOM
-  });
+    requestAnimationFrame(autoGrow); // size to content once attached to the DOM
+    return item;
+  }
 }
 
 queueToggleEl.addEventListener('click', () => {
@@ -1748,16 +1762,6 @@ queueToggleEl.addEventListener('click', () => {
   queueToggleEl.classList.toggle('active', open);
   localStorage.setItem('seshman.queueOpen', open ? '1' : '0');
   if (activePtyId != null) requestAnimationFrame(() => fitActive(activePtyId)); // main width changed
-});
-queueAddEl.addEventListener('click', () => {
-  const sid = currentSessionId();
-  if (!sid) return;
-  if (!queues[sid]) queues[sid] = [];
-  queues[sid].push('');
-  saveQueues();
-  renderQueue();
-  const last = queueListEl.querySelector('.queue-item:last-child .queue-text');
-  if (last) last.focus();
 });
 if (localStorage.getItem('seshman.queueOpen') === '1') {
   queuePaneEl.classList.remove('collapsed');
