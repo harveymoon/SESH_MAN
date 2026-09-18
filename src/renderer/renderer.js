@@ -481,9 +481,12 @@ function renderList(shown) {
     const metaSpans = el.querySelectorAll('.session-meta > span');
     metaSpans[0].textContent = relTime(s.lastActivity);
     metaSpans[1].textContent = s.messageCount + ' msgs';
-    if (s.version) {
+    // Model (from the session's last assistant turn) — more useful per-row
+    // than the CLI version this slot used to show.
+    if (s.model) {
       const v = document.createElement('span');
-      v.textContent = 'v' + s.version;
+      v.textContent = prettyModel(s.model);
+      v.title = s.model + (s.version ? '  ·  claude v' + s.version : '');
       el.querySelector('.session-meta').appendChild(v);
     }
     el.querySelector('.session-project').textContent = displayTitle(s); // session title (bold)
