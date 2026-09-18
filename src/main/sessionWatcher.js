@@ -186,7 +186,10 @@ function applyTranscriptLines(meta, text) {
     if (r.type === 'ai-title' && r.aiTitle) meta.aiTitle = r.aiTitle;
     else if (r.type === 'custom-title' && r.customTitle) meta.customTitle = r.customTitle;
     else if (r.type === 'last-prompt' && r.lastPrompt) meta.lastPrompt = r.lastPrompt;
-    else if (r.type === 'user' || r.type === 'assistant') {
+    else if ((r.type === 'user' || r.type === 'assistant') && !r.isCompactSummary && !r.isMeta) {
+      // isCompactSummary (continuation recaps) and isMeta (injected context)
+      // are user-TYPE records but not real conversation — they must not count
+      // as messages, become the preview, or re-sort/re-notify the session.
       meta.messageCount++;
       const text2 = messageText(r.message);
       // Cap the preview: it rides every scan diff + IPC push, and the UI clamps

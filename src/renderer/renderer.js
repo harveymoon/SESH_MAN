@@ -313,15 +313,24 @@ function sessionDuration(s) {
   return start ? Math.max(0, (s.lastActivity || 0) - start) : 0;
 }
 
-// The watcher delivers recency order; re-sort a copy for the other modes.
+// The recency signal for SORTING and the age display. Real messages only —
+// away-summary recaps, compact summaries, title writes, and bare file touches
+// must not bounce a session back to the top of the list. Sessions with no
+// messages yet (just spawned) fall back to raw lastActivity so they still
+// surface when created.
+function effectiveActivity(s) {
+  return s.lastMessageActivity || s.lastActivity || 0;
+}
+
+// The watcher delivers raw-lastActivity order; re-sort a copy for the mode.
 function sortSessions(list) {
   const arr = list.slice();
   if (sortMode === 'popular') {
-    arr.sort((a, b) => (b.messageCount || 0) - (a.messageCount || 0) || (b.lastActivity || 0) - (a.lastActivity || 0));
+    arr.sort((a, b) => (b.messageCount || 0) - (a.messageCount || 0) || effectiveActivity(b) - effectiveActivity(a));
   } else if (sortMode === 'longest') {
-    arr.sort((a, b) => sessionDuration(b) - sessionDuration(a) || (b.lastActivity || 0) - (a.lastActivity || 0));
+    arr.sort((a, b) => sessionDuration(b) - sessionDuration(a) || effectiveActivity(b) - effectiveActivity(a));
   } else {
-    arr.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+    arr.sort((a, b) => effectiveActivity(b) - effectiveActivity(a));
   }
   return arr;
 }
@@ -436,7 +445,7 @@ function renderList(shown) {
   sessionListEl.innerHTML = '';
   let lastBucket = -1;
   for (const s of shown) {
-    const bucket = bucketOf(s.lastActivity);
+    const bucket = bucketOf(effectiveActivity(s));
     // Age dividers only make sense in recency order.
     if (sortMode === 'recent' && bucket !== lastBucket) {
       lastBucket = bucket;
@@ -479,7 +488,7 @@ function renderList(shown) {
     // never interpolate into innerHTML, so a crafted status/version can't inject.
     el.querySelector('.session-status').textContent = ds.statusText;
     const metaSpans = el.querySelectorAll('.session-meta > span');
-    metaSpans[0].textContent = relTime(s.lastActivity);
+    metaSpans[0].textContent = relTime(effectiveActivity(s)); // last real message
     metaSpans[1].textContent = s.messageCount + ' msgs';
     // Model (from the session's last assistant turn) — more useful per-row
     // than the CLI version this slot used to show.
@@ -1201,7 +1210,7 @@ function renderGrid(shown) {
       </div>
       <div class="card-msg">${msg ? '<span class="role"></span>' : ''}<span class="card-msg-text"></span></div>`;
     card.querySelector('.card-status').textContent = ds.statusText; // external-derived: text only
-    card.querySelector('.card-time').textContent = relTime(s.lastActivity);
+    card.querySelector('.card-time').textContent = relTime(effectiveActivity(s));
     card.querySelector('.card-msgs').textContent = s.messageCount + ' msgs';
     card.querySelector('.card-project').textContent = displayTitle(s);
     card.querySelector('.card-folder').textContent = '▸ ' + s.project;
