@@ -5,6 +5,7 @@
 const sessionListEl = document.getElementById('session-list');
 const sessionCountEl = document.getElementById('session-count');
 const sourceFilterEl = document.getElementById('source-filter');
+const sortModeEl = document.getElementById('sort-mode');
 const viewToggleEl = document.getElementById('view-toggle');
 const viewMenuEl = document.getElementById('view-menu');
 const vmHideInactiveEl = document.getElementById('vm-hide-inactive');
@@ -47,6 +48,10 @@ const sessionToPty = new Map();
 let activePtyId = null;
 let latestSessions = [];
 let sourceFilter = localStorage.getItem('seshman.sourceFilter') || 'both';
+// Sidebar/grid ordering: 'recent' (last activity), 'popular' (message count),
+// 'longest' (session duration). popular/longest barely move as sessions tick,
+// so rows stop jumping around while many sessions are live.
+let sortMode = localStorage.getItem('seshman.sortMode') || 'recent';
 let gridMode = localStorage.getItem('seshman.gridMode') === '1';
 let searchQuery = '';
 let logSeq = 0;
@@ -293,9 +298,27 @@ function relTime(ms) {
 }
 
 // Apply source filter + text search. Order (recency) comes from the watcher.
+function sessionDuration(s) {
+  const start = s.firstActivity || s.startedAt || 0;
+  return start ? Math.max(0, (s.lastActivity || 0) - start) : 0;
+}
+
+// The watcher delivers recency order; re-sort a copy for the other modes.
+function sortSessions(list) {
+  const arr = list.slice();
+  if (sortMode === 'popular') {
+    arr.sort((a, b) => (b.messageCount || 0) - (a.messageCount || 0) || (b.lastActivity || 0) - (a.lastActivity || 0));
+  } else if (sortMode === 'longest') {
+    arr.sort((a, b) => sessionDuration(b) - sessionDuration(a) || (b.lastActivity || 0) - (a.lastActivity || 0));
+  } else {
+    arr.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+  }
+  return arr;
+}
+
 function applyFilters(sessions) {
   const q = searchQuery.trim().toLowerCase();
-  return sessions.filter((s) => {
+  return sortSessions(sessions).filter((s) => {
     if (archived.has(s.sessionId) && !showArchived) return false; // hidden by default
     if (hideInactive && !displayState(s).running) return false; // drop stopped sessions
     if (sourceFilter !== 'both' && s.source !== sourceFilter) return false;
@@ -399,7 +422,8 @@ function renderList(shown) {
   let lastBucket = -1;
   for (const s of shown) {
     const bucket = bucketOf(s.lastActivity);
-    if (bucket !== lastBucket) {
+    // Age dividers only make sense in recency order.
+    if (sortMode === 'recent' && bucket !== lastBucket) {
       lastBucket = bucket;
       const divider = document.createElement('div');
       divider.className = 'list-divider';
@@ -1443,6 +1467,12 @@ sourceFilterEl.value = sourceFilter;
 sourceFilterEl.addEventListener('change', () => {
   sourceFilter = sourceFilterEl.value;
   localStorage.setItem('seshman.sourceFilter', sourceFilter);
+  render();
+});
+sortModeEl.value = sortMode;
+sortModeEl.addEventListener('change', () => {
+  sortMode = sortModeEl.value;
+  localStorage.setItem('seshman.sortMode', sortMode);
   render();
 });
 

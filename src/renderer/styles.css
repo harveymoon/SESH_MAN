@@ -167,7 +167,8 @@ body { display: flex; flex-direction: column; }
   color: var(--muted);
   letter-spacing: 0.04em;
 }
-#source-filter {
+#source-filter,
+#sort-mode {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border-2);
@@ -179,8 +180,10 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
   outline: none;
 }
-#source-filter:hover { border-color: var(--accent); }
-#source-filter option { background: var(--panel); color: var(--text); }
+#source-filter:hover,
+#sort-mode:hover { border-color: var(--accent); }
+#source-filter option,
+#sort-mode option { background: var(--panel); color: var(--text); }
 
 .hdr-controls { display: flex; align-items: center; gap: 6px; }
 

@@ -142,6 +142,8 @@ function parseTranscript(file) {
     customTitle: null, // user's /rename title
     messageCount: 0,
     lastActivity: 0,
+    firstActivity: 0, // earliest transcript timestamp -> session duration
+
     // Timestamp of the most recent real user/assistant MESSAGE only. Unlike
     // lastActivity (which also moves on summaries, title writes, and file
     // mtime touches), this only advances when there's genuinely new content
@@ -199,6 +201,7 @@ function parseTranscript(file) {
     if (r.timestamp) {
       const t = Date.parse(r.timestamp);
       if (t > meta.lastActivity) meta.lastActivity = t;
+      if (t && (!meta.firstActivity || t < meta.firstActivity)) meta.firstActivity = t;
     }
   }
   return meta;
@@ -337,6 +340,7 @@ class SessionWatcher extends EventEmitter {
           updatedAt,
           lastActivity: Math.max(meta.lastActivity || 0, updatedAt, st.mtimeMs),
           lastMessageActivity: meta.lastMessageActivity || 0,
+          firstActivity: meta.firstActivity || 0,
           model: meta.model || '',
           color: meta.color || null,
           aiTitle: meta.aiTitle,
