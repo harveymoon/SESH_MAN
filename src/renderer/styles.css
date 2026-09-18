@@ -550,6 +550,24 @@ body { display: flex; flex-direction: column; }
 .log-msg.user .log-role { color: var(--accent); }
 .log-msg.user .log-text { color: var(--text); }
 .log-empty { color: var(--faint); text-align: center; padding: 36px; font-size: 11px; }
+/* floating "back to the live prompt" affordance when scrolled up */
+.jump-latest {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 5;
+  background: var(--panel-2);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  cursor: pointer;
+  opacity: 0.92;
+}
+.jump-latest:hover { background: var(--accent); color: var(--bg); }
+
 .term-pane.exited::after {
   content: "ended";
   position: absolute; top: 8px; right: 14px;

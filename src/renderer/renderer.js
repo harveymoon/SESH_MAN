@@ -1425,6 +1425,25 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   term.open(pane);
   fit.fit();
 
+  // "▼ latest": xterm only auto-follows output while the viewport is AT the
+  // bottom — one stray wheel tick during a fast stream (a long answer, a plan)
+  // detaches it and the pane looks stuck until any keypress snaps it back
+  // (scrollOnUserInput). Surface that state and make recovery one click.
+  const jump = document.createElement('button');
+  jump.className = 'jump-latest hidden';
+  jump.textContent = '▼ latest';
+  jump.title = 'Scroll to the live prompt (Ctrl+End)';
+  jump.addEventListener('click', () => {
+    term.scrollToBottom();
+    term.focus();
+  });
+  pane.appendChild(jump);
+  const updateJump = () => {
+    const b = term.buffer.active;
+    jump.classList.toggle('hidden', b.viewportY >= b.baseY);
+  };
+  term.onScroll(updateJump);
+
   // Spawning the pty can fail (claude not on PATH, ConPTY init error). If it
   // does, tear down the half-built pane/terminal and show the error inline
   // instead of leaving an orphaned, uncloseable pane behind.
@@ -1485,6 +1504,10 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     if (isZoomKey(e)) return false;
     if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey)) return true;
     const k = e.key.toLowerCase();
+    if (k === 'end') {
+      term.scrollToBottom(); // Ctrl+End = hard snap to the live prompt
+      return false;
+    }
     if (k === 'v') {
       e.preventDefault();
       pasteClipboard();
@@ -1529,6 +1552,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   });
 
   const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false, color: sessColor };
+  entry.updateJump = updateJump; // re-checked after writes (see onPtyData)
   terms.set(ptyId, entry);
   if (sessionId) sessionToPty.set(sessionId, ptyId);
 
@@ -1712,7 +1736,9 @@ function schedulePromptScan(id) {
 window.api.onPtyData(({ id, data }) => {
   const entry = terms.get(id);
   if (entry && !entry.isLog) {
-    entry.term.write(data);
+    // The callback runs after xterm has parsed the chunk, so the jump-button
+    // check sees the post-write viewport/base positions.
+    entry.term.write(data, () => entry.updateJump && entry.updateJump());
     schedulePromptScan(id);
   }
 });
