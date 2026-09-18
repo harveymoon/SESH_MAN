@@ -1,57 +1,65 @@
 # seshMan
 
-A small, sharp Electron app that gives you one window to see and drive **every
-running coding-agent session** on your machine.
+One window to see and drive **every Claude Code session** on your machine — a
+terminal host, dashboard, and mission control built on Electron + xterm.js +
+node-pty.
 
-- **Live dashboard** — watches `~/.claude/sessions/*.json` (the per-PID registry
-  Claude maintains) and shows each instance's project, title, status
-  (busy / idle), and last prompt. Updates in real time.
-- **Terminal host** — click a session to attach a real terminal
-  (`xterm.js` + `node-pty`) that resumes it via `claude --resume <id>`. Multiple
-  sessions live side-by-side as tabs.
+## Features
 
-## How it works
+**Sessions**
+- Live sidebar of every session (running or resumable) from `~/.claude` —
+  status, model, message count, `/color` stripe, last-real-message recency
+  (summaries/recaps/meta writes never re-sort or re-notify)
+- Sort by recent / popular / longest; filter live-only / archived; search
+- Click to attach a real terminal (`claude --resume`), or read a stopped
+  session's transcript with "resume here"
+- Needs-input detection (teal ring + pulsing ?), unread pulses, desktop
+  notifications (bell toggle) when a session blocks or finishes while the
+  window is unfocused
+- Grid overview cards; "you asked" banner pinning your last prompt while it's
+  scrolled off-screen; ▼ latest rescue button; Ctrl+End snap
+
+**Panes & tabs**
+- **◫ insight** — the layers the terminal hides: thinking blocks, live
+  tool-call feed, TodoWrite list, subagent launches, MCP servers + hooks
+- **▤ board** — machine-local agent bulletin board (topics + notes, one file
+  per note under `~/.claude/bulletin/`); agents post via the `bulletin-board`
+  skill, you moderate/delete from the UI; per-session ▤ badges when a note is
+  addressed to a session, cleared when it actually reads
+- **▦ usage** — token metrics from local transcripts: today's tiles, 14-day
+  chart, by-model and by-session tables
+- **queue** — per-session prompt queue (auto-growing draft slot, drag-resize
+  pane, large editor modal, saved-prompt bookmarks)
+- **▧ shots** — this month's `Pictures\Screenshots` grid; click to insert a
+  path into the active session. Clipboard image paste forwards to claude as a
+  real `[Image #N]`
+
+**Customization** — ⚙ settings: dark/light theme, terminal font + size, app
+font (OpenDyslexic supported), all persisted.
+
+**Local API** (`127.0.0.1:7374`, Bearer token) — sessions/focus/prompt/
+bookmarks for Desk Deck-style controllers. See `DESK_DECK_INTEGRATION.md`.
+
+## Data sources (all local, no network)
 
 | Source | What we read |
 |--------|--------------|
-| `~/.claude/sessions/<pid>.json` | live instance registry: pid, sessionId, cwd, status, version |
-| `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` | transcript → aiTitle, lastPrompt, message count |
+| `~/.claude/sessions/<pid>.json` | live registry: pid, sessionId, cwd, status |
+| `~/.claude/projects/**/<sessionId>.jsonl` | transcripts — parsed incrementally (append-only tail reads) for titles, activity, model, colors, usage, insight layers |
+| `~/.claude/bulletin/` | agent bulletin board notes + read cursors |
+| `~/.claude.json`, settings files | MCP servers + hooks shown in insight |
 
-Liveness is confirmed with a `process.kill(pid, 0)` probe so stale files drop off.
+Liveness = pid probe **plus** claude.exe start-time match (recycled PIDs can't
+impersonate a session).
 
-## Run
-
-```bash
-npm install      # also rebuilds node-pty against Electron's ABI (postinstall)
-npm start
-```
-
-If the native build fails (needs Visual Studio Build Tools on Windows), run:
+## Run / build
 
 ```bash
-npm run rebuild
+npm install      # rebuilds node-pty against Electron's ABI (postinstall)
+npm start        # dev
+npm run pack     # portable app -> release/seshMan-win32-x64/seshMan.exe
 ```
 
-## Notes / caveats
-
-- These `~/.claude` files are **undocumented internals**; the shape varies
-  between Claude versions, so parsing is defensive.
-- The app *hosts* terminals (spawns Claude itself). It does not inject input
-  into Claude tabs already running in other terminals — those still show in the
-  dashboard as read-only status, and clicking them opens a fresh attached
-  terminal that resumes the same session.
-
-## Layout
-
-```
-src/
-  main/
-    main.js           Electron entry, window + IPC wiring
-    sessionWatcher.js  reads + watches ~/.claude/sessions
-    ptyManager.js      node-pty spawn/IO of claude
-    preload.js         contextBridge API
-  renderer/
-    index.html         shell + xterm script tags
-    renderer.js        sidebar + terminal tabs
-    styles.css
-```
+The packaged exe needs its sibling files — move the whole folder, not the exe.
+Never rebuild while seshMan.exe is running (the packager overwrites the folder
+the live exe runs from).
