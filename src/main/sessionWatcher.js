@@ -152,7 +152,18 @@ function newTranscriptMeta() {
     lastMessage: null, // { role, text } of the most recent user/assistant message
     model: '', // model id from the most recent assistant turn (e.g. claude-fable-5)
     color: null, // named color from the last /color command (red, purple, ...)
+    // Token usage totals (from assistant records' usage blocks) and per-local-
+    // day-per-model buckets: { 'YYYY-MM-DD': { modelId: {i,o,cr,cc,t} } }.
+    // i=fresh input, o=output, cr=cache read, cc=cache creation, t=thinking.
+    usage: { i: 0, o: 0, cr: 0, cc: 0, t: 0 },
+    usageDays: {},
   };
+}
+
+function localDayKey(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
 // Fold a chunk of jsonl text into meta. Every field either accumulates
@@ -189,6 +200,31 @@ function applyTranscriptLines(meta, text) {
       // mid-session /model switch shows up). Skip synthetic placeholder turns.
       if (r.type === 'assistant' && r.message && r.message.model && r.message.model !== '<synthetic>') {
         meta.model = r.message.model;
+      }
+      // Token usage: totals + per-day-per-model buckets for the usage panel.
+      const u = r.type === 'assistant' && r.message && r.message.usage;
+      if (u) {
+        const i = u.input_tokens || 0;
+        const o = u.output_tokens || 0;
+        const cr = u.cache_read_input_tokens || 0;
+        const cc = u.cache_creation_input_tokens || 0;
+        const t = (u.output_tokens_details && u.output_tokens_details.thinking_tokens) || 0;
+        meta.usage.i += i;
+        meta.usage.o += o;
+        meta.usage.cr += cr;
+        meta.usage.cc += cc;
+        meta.usage.t += t;
+        if (r.timestamp) {
+          const day = localDayKey(Date.parse(r.timestamp));
+          const model = r.message.model && r.message.model !== '<synthetic>' ? r.message.model : 'unknown';
+          const byModel = meta.usageDays[day] || (meta.usageDays[day] = {});
+          const b = byModel[model] || (byModel[model] = { i: 0, o: 0, cr: 0, cc: 0, t: 0 });
+          b.i += i;
+          b.o += o;
+          b.cr += cr;
+          b.cc += cc;
+          b.t += t;
+        }
       }
     } else if (r.type === 'system' && typeof r.content === 'string' && r.content.includes('Session color')) {
       // /color leaves a local_command stdout record in the transcript — the
@@ -429,6 +465,31 @@ class SessionWatcher extends EventEmitter {
     // claude.exe membership also keeps this in agreement with list()'s `running`.
     if (this.proc.byPid.has(sf.pid)) return this.proc.matches(sf.pid, sf.startedAt);
     return false;
+  }
+
+  // On-demand payload for the usage panel. Deliberately NOT part of the
+  // per-tick session snapshot (usageDays would bloat every scan diff + IPC);
+  // the renderer fetches this only while the usage tab is open. Reads the
+  // in-memory transcriptCache that list() maintains, so it costs no file IO.
+  usageSummary() {
+    this.list(); // ensure the cache reflects the current tick
+    const cutoff = localDayKey(Date.now() - 30 * 86400000);
+    const sessions = [];
+    for (const [file, entry] of transcriptCache) {
+      const m = entry.meta;
+      if (!m || !m.usage || (m.usage.i === 0 && m.usage.o === 0 && m.usage.cr === 0 && m.usage.cc === 0)) continue;
+      const days = {};
+      for (const [day, byModel] of Object.entries(m.usageDays)) {
+        if (day >= cutoff) days[day] = byModel;
+      }
+      sessions.push({
+        sessionId: path.basename(file).replace(/\.jsonl$/, ''),
+        model: m.model || '',
+        totals: m.usage,
+        days,
+      });
+    }
+    return { generatedAt: Date.now(), sessions };
   }
 
   async scan() {

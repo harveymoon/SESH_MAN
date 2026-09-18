@@ -681,7 +681,8 @@ function setBoardMode(on) {
   localStorage.setItem('seshman.boardMode', on ? '1' : '0');
   boardViewEl.classList.toggle('show', on);
   boardToggleEl.classList.toggle('active', on);
-  if (on && gridMode) setGridMode(false); // board and grid are mutually exclusive
+  if (on && gridMode) setGridMode(false); // grid/board/usage are mutually exclusive
+  if (on && usageMode) setUsageMode(false);
   if (on) {
     renderBoard();
     refreshBoardToggleDot();
@@ -947,6 +948,222 @@ boardTopicDeleteEl.addEventListener('click', async () => {
 });
 window.api.onBoardChanged(() => refreshBoard());
 
+// ---------- Usage panel ----------
+// Token metrics aggregated from local transcripts (fetched on demand from the
+// watcher's in-memory cache — never part of the per-tick session snapshot).
+// "new" tokens = fresh input + cache writes + output; cache READS are shown
+// separately (they dwarf everything and are the cheap part).
+const usageToggleEl = document.getElementById('usage-toggle');
+const usageViewEl = document.getElementById('usage-view');
+const usageTilesEl = document.getElementById('usage-tiles');
+const usageChartEl = document.getElementById('usage-chart');
+const usageModelsEl = document.getElementById('usage-models');
+const usageSessionsEl = document.getElementById('usage-sessions');
+const usageFootEl = document.getElementById('usage-foot');
+
+let usageMode = localStorage.getItem('seshman.usageMode') === '1';
+let usageData = null;
+let usageTimer = null;
+
+function usageDayKey(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+function fmtTok(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+  return String(n);
+}
+
+async function fetchUsage() {
+  try {
+    usageData = await window.api.getUsage();
+  } catch (_) {
+    return;
+  }
+  renderUsage();
+}
+
+function setUsageMode(on) {
+  usageMode = on;
+  localStorage.setItem('seshman.usageMode', on ? '1' : '0');
+  usageViewEl.classList.toggle('show', on);
+  usageToggleEl.classList.toggle('active', on);
+  if (on && gridMode) setGridMode(false);
+  if (on && boardMode) setBoardMode(false);
+  clearInterval(usageTimer);
+  usageTimer = null;
+  if (on) {
+    fetchUsage();
+    usageTimer = setInterval(fetchUsage, 5000); // live-ish while open
+  } else if (activePtyId != null) {
+    requestAnimationFrame(() => fitActive(activePtyId));
+  }
+}
+
+function usageTile(value, label, title) {
+  const t = document.createElement('div');
+  t.className = 'u-tile';
+  const v = document.createElement('div');
+  v.className = 'u-val';
+  v.textContent = value;
+  const l = document.createElement('div');
+  l.className = 'u-label';
+  l.textContent = label;
+  if (title) t.title = title;
+  t.appendChild(v);
+  t.appendChild(l);
+  return t;
+}
+
+function renderUsage() {
+  if (!usageData) return;
+  const today = usageDayKey(Date.now());
+
+  // Aggregate: per-day fresh-token breakdown, today's per-model rollup,
+  // per-session today totals.
+  const dayBreak = {}; // day -> {i,cc,o}
+  const todayModels = {}; // model -> {i,o,cr,cc,t}
+  const tt = { i: 0, o: 0, cr: 0, cc: 0, t: 0 }; // today totals
+  const sessRows = [];
+  for (const s of usageData.sessions) {
+    let sToday = 0;
+    for (const [day, byModel] of Object.entries(s.days)) {
+      for (const [model, b] of Object.entries(byModel)) {
+        const db = dayBreak[day] || (dayBreak[day] = { i: 0, cc: 0, o: 0 });
+        db.i += b.i;
+        db.cc += b.cc;
+        db.o += b.o;
+        if (day === today) {
+          const tm = todayModels[model] || (todayModels[model] = { i: 0, o: 0, cr: 0, cc: 0, t: 0 });
+          tm.i += b.i;
+          tm.o += b.o;
+          tm.cr += b.cr;
+          tm.cc += b.cc;
+          tm.t += b.t;
+          tt.i += b.i;
+          tt.o += b.o;
+          tt.cr += b.cr;
+          tt.cc += b.cc;
+          tt.t += b.t;
+          sToday += b.i + b.cc + b.o;
+        }
+      }
+    }
+    if (sToday > 0) {
+      sessRows.push({
+        sessionId: s.sessionId,
+        model: s.model,
+        today: sToday,
+        total: s.totals.i + s.totals.cc + s.totals.o,
+      });
+    }
+  }
+
+  // Stat tiles (hero numbers; big value, muted label).
+  usageTilesEl.innerHTML = '';
+  const freshToday = tt.i + tt.cc + tt.o;
+  const denom = tt.cr + tt.i + tt.cc;
+  const hitPct = denom ? Math.round((tt.cr / denom) * 100) : 0;
+  usageTilesEl.appendChild(usageTile(fmtTok(freshToday), 'new tokens today', 'fresh input + cache writes + output'));
+  usageTilesEl.appendChild(usageTile(fmtTok(tt.o), 'output today', tt.t ? fmtTok(tt.t) + ' of it thinking' : ''));
+  usageTilesEl.appendChild(usageTile(fmtTok(tt.cr), 'cache read today', 'context served from prompt cache'));
+  usageTilesEl.appendChild(usageTile(hitPct + '%', 'cache hit rate', 'cache reads / all input tokens today'));
+  usageTilesEl.appendChild(usageTile(String(sessRows.length), 'sessions active today', ''));
+
+  // 14-day bar chart: one series, app accent, per-bar tooltip, sparse labels.
+  usageChartEl.innerHTML = '';
+  const days = [];
+  for (let k = 13; k >= 0; k--) days.push(usageDayKey(Date.now() - k * 86400000));
+  const max = Math.max(1, ...days.map((d) => (dayBreak[d] ? dayBreak[d].i + dayBreak[d].cc + dayBreak[d].o : 0)));
+  days.forEach((d, idx) => {
+    const b = dayBreak[d] || { i: 0, cc: 0, o: 0 };
+    const v = b.i + b.cc + b.o;
+    const col = document.createElement('div');
+    col.className = 'u-col';
+    const bar = document.createElement('div');
+    bar.className = 'u-bar' + (d === today ? ' today' : '');
+    bar.style.height = Math.max(v > 0 ? 2 : 0, Math.round((v / max) * 100)) + '%';
+    col.title = `${d}: ${fmtTok(v)} new  (in ${fmtTok(b.i)} · cache-write ${fmtTok(b.cc)} · out ${fmtTok(b.o)})`;
+    const lbl = document.createElement('div');
+    lbl.className = 'u-day';
+    // sparse x labels: first, last, and every 4th — plus the value on the max bar
+    lbl.textContent = idx === 0 || idx === 13 || idx % 4 === 0 ? d.slice(5) : '';
+    if (v === max && v > 0) {
+      const top = document.createElement('div');
+      top.className = 'u-peak';
+      top.textContent = fmtTok(v);
+      col.appendChild(top);
+    }
+    col.appendChild(bar);
+    col.appendChild(lbl);
+    usageChartEl.appendChild(col);
+  });
+
+  // Today by model (table: identity + magnitudes).
+  usageModelsEl.innerHTML = '';
+  const mrows = Object.entries(todayModels)
+    .map(([model, b]) => ({ model, fresh: b.i + b.cc + b.o, b }))
+    .sort((a, z) => z.fresh - a.fresh);
+  usageModelsEl.appendChild(usageHeaderRow(['model', 'new', 'out', 'cache read']));
+  for (const r of mrows) {
+    usageModelsEl.appendChild(
+      usageRow([prettyModel(r.model) || r.model, fmtTok(r.fresh), fmtTok(r.b.o), fmtTok(r.b.cr)])
+    );
+  }
+  if (!mrows.length) usageModelsEl.appendChild(usageRow(['no activity today', '', '', '']));
+
+  // Top sessions today (joined with the live session list for names).
+  usageSessionsEl.innerHTML = '';
+  usageSessionsEl.appendChild(usageHeaderRow(['session', 'model', 'today', 'total']));
+  sessRows.sort((a, z) => z.today - a.today);
+  for (const r of sessRows.slice(0, 12)) {
+    const live = latestSessions.find((x) => x.sessionId === r.sessionId);
+    const name = live
+      ? displayTitle(live)
+      : r.sessionId.startsWith('agent-')
+        ? '(subagent ' + r.sessionId.slice(6, 14) + ')'
+        : r.sessionId.slice(0, 8);
+    const row = usageRow([name, prettyModel(r.model) || '', fmtTok(r.today), fmtTok(r.total)]);
+    if (live) {
+      row.classList.add('u-click');
+      row.addEventListener('click', () => {
+        setUsageMode(false);
+        openSession(live);
+      });
+    }
+    usageSessionsEl.appendChild(row);
+  }
+  if (!sessRows.length) usageSessionsEl.appendChild(usageRow(['no activity today', '', '', '']));
+
+  usageFootEl.textContent =
+    'computed locally from ~/.claude transcripts · cache reads are the cheap, prompt-cached part · 30 days retained';
+}
+
+function usageHeaderRow(cells) {
+  const tr = document.createElement('tr');
+  tr.className = 'u-head';
+  for (const c of cells) {
+    const td = document.createElement('td');
+    td.textContent = c;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+function usageRow(cells) {
+  const tr = document.createElement('tr');
+  for (const c of cells) {
+    const td = document.createElement('td');
+    td.textContent = c;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+usageToggleEl.addEventListener('click', () => setUsageMode(!usageMode));
+
 // ---------- Grid overview (full-window cards) ----------
 function renderGrid(shown) {
   gridViewEl.innerHTML = '';
@@ -1011,7 +1228,8 @@ function setGridMode(on) {
   localStorage.setItem('seshman.gridMode', on ? '1' : '0');
   gridViewEl.classList.toggle('show', on);
   gridToggleEl.classList.toggle('active', on);
-  if (on && boardMode) setBoardMode(false); // grid and board are mutually exclusive
+  if (on && boardMode) setBoardMode(false); // grid/board/usage are mutually exclusive
+  if (on && usageMode) setUsageMode(false);
   if (on) renderGrid(applyFilters(latestSessions));
   else if (activePtyId != null) requestAnimationFrame(() => fitActive(activePtyId)); // pane visible again
 }
@@ -1574,7 +1792,8 @@ searchClearEl.addEventListener('click', () => {
 // Grid-mode toggle (full-window card overview).
 gridToggleEl.addEventListener('click', () => setGridMode(!gridMode));
 setGridMode(gridMode); // restore persisted state
-setBoardMode(boardMode); // restore board tab (mutual exclusion keeps one of the two)
+setBoardMode(boardMode); // restore tabs (mutual exclusion keeps at most one open)
+setUsageMode(usageMode);
 
 // ---------- Font size (Ctrl +/-/0) ----------
 function isZoomKey(e) {

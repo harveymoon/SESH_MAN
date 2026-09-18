@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   // Sessions
   getSessions: () => ipcRenderer.invoke('sessions:get'),
   isSessionLive: (sessionId) => ipcRenderer.invoke('session:live', sessionId),
+  getUsage: () => ipcRenderer.invoke('usage:get'),
   onSessions: (cb) => {
     const handler = (_evt, sessions) => cb(sessions);
     ipcRenderer.on('sessions:update', handler);

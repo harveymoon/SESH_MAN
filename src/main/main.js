@@ -227,6 +227,7 @@ function createWindow() {
 // ---- IPC: sessions ----
 ipcMain.handle('sessions:get', () => watcher.list());
 ipcMain.handle('session:live', (_evt, sessionId) => watcher.isLive(sessionId));
+ipcMain.handle('usage:get', () => watcher.usageSummary());
 // ---- IPC: agent bulletin board (local files, see bulletinStore.js) ----
 ipcMain.handle('bulletin:list', () => ({
   notes: bulletinStore.listNotes(),

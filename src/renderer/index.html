@@ -28,6 +28,7 @@
       </button>
       <button id="grid-toggle" title="Toggle grid overview">⊞ grid</button>
       <button id="board-toggle" title="Agent bulletin board">▤ board</button>
+      <button id="usage-toggle" title="Token usage (from local transcripts)">▦ usage</button>
       <button id="queue-toggle" title="Prompt queue">queue</button>
       <div class="winctrl-spacer"></div>
     </div>
@@ -140,6 +141,25 @@
                     spellcheck="false"></textarea>
         </footer>
       </section>
+    </div>
+
+    <div id="usage-view">
+      <div id="usage-tiles"></div>
+      <div class="usage-section">
+        <div class="usage-h" id="usage-chart-title">new tokens per day — last 14 days</div>
+        <div id="usage-chart"></div>
+      </div>
+      <div id="usage-cols">
+        <div class="usage-section">
+          <div class="usage-h">today by model</div>
+          <table class="usage-table" id="usage-models"></table>
+        </div>
+        <div class="usage-section">
+          <div class="usage-h">top sessions today</div>
+          <table class="usage-table" id="usage-sessions"></table>
+        </div>
+      </div>
+      <div id="usage-foot"></div>
     </div>
 
     <div id="bookmark-modal" class="hidden">
