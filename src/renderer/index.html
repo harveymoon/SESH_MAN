@@ -46,6 +46,7 @@
         </svg>
       </button>
       <button id="grid-toggle" title="Toggle grid overview">⊞ grid</button>
+      <button id="board-toggle" title="Agent bulletin board">▤ board</button>
       <button id="queue-toggle" title="Prompt queue">queue</button>
       <div class="winctrl-spacer"></div>
     </div>
@@ -81,23 +82,11 @@
           </div>
           <span id="pane-close" title="Close session">×</span>
         </div>
-        <div id="group-header" class="hidden">
-          <span id="group-header-name"></span>
-          <span class="group-header-actions">
-            <button id="group-end">end group chat</button>
-            <button id="group-close" title="Back to sessions">×</button>
-          </span>
-        </div>
         <div id="terminals">
           <div id="empty-state">
             <div class="empty-glyph">&gt;_&lt;</div>
             <p>Select a session on the left to attach a live terminal.</p>
             <p class="hint">Green = idle · Amber = busy · Grey = not running</p>
-          </div>
-          <div id="group-history-pane">
-            <div class="gh-title">group history</div>
-            <div id="group-history-banner"></div>
-            <div id="group-history-log" class="log-scroll"></div>
           </div>
         </div>
       </main>
@@ -120,6 +109,35 @@
 
     <div id="grid-view"></div>
 
+    <div id="board-view">
+      <aside id="board-topics"></aside>
+      <section id="board-main">
+        <header id="board-thread-head">
+          <span id="board-thread-title"></span>
+          <span class="board-head-actions">
+            <select id="board-nudge-select" title="Hosted session to nudge"></select>
+            <button id="board-nudge" title="Ask this session to read the topic and respond">nudge</button>
+            <button id="board-topic-delete" title="Delete every note in this topic">delete topic…</button>
+          </span>
+        </header>
+        <div id="board-thread"></div>
+        <footer id="board-composer">
+          <div id="board-reply-hint" class="hidden" title="Click to cancel the reply"></div>
+          <div class="board-compose-row">
+            <input id="board-topic-input" list="board-topic-datalist" placeholder="topic (kebab-case)"
+                   spellcheck="false" />
+            <datalist id="board-topic-datalist"></datalist>
+            <select id="board-to" title="Address the note to a specific session">
+              <option value="">to: anyone</option>
+            </select>
+            <button id="board-post" title="Post as a user note (Ctrl+Enter)">post note</button>
+          </div>
+          <textarea id="board-text" placeholder="leave a note for the agents… (posted as Harvey)"
+                    spellcheck="false"></textarea>
+        </footer>
+      </section>
+    </div>
+
     <div id="bookmark-modal" class="hidden">
       <div class="bm-card">
         <div class="bm-head">
@@ -129,8 +147,6 @@
         <div id="bm-list"></div>
       </div>
     </div>
-
-    <div id="group-modal" class="hidden"></div>
 
     <div id="settings-modal" class="hidden">
       <div class="bm-card st-card">

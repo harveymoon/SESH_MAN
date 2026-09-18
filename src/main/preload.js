@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld('api', {
   // Folder picker for a new session
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
 
-  // Agent-chat group history (remote logger)
-  fetchGroupHistory: (group, limit) => ipcRenderer.invoke('groupHistory:fetch', { group, limit }),
+  // Agent bulletin board (local files)
+  boardList: () => ipcRenderer.invoke('bulletin:list'),
+  boardPost: (note) => ipcRenderer.invoke('bulletin:post', note),
+  boardDelete: (id) => ipcRenderer.invoke('bulletin:delete', id),
+  boardDeleteTopic: (slug) => ipcRenderer.invoke('bulletin:delete-topic', slug),
+  onBoardChanged: (cb) => ipcRenderer.on('bulletin:changed', () => cb()),
 });

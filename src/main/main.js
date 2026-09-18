@@ -6,7 +6,7 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, clipboard, crashReporter } = 
 const { SessionWatcher, findTranscript, readTranscriptMessages } = require('./sessionWatcher');
 const { PtyManager } = require('./ptyManager');
 const apiServer = require('./apiServer');
-const agentChatHistory = require('./agentChatHistory');
+const bulletinStore = require('./bulletinStore');
 
 // Live read-only transcript views: sessionId -> { watcher, debounce }.
 const transcriptWatchers = new Map();
@@ -218,10 +218,19 @@ function createWindow() {
 // ---- IPC: sessions ----
 ipcMain.handle('sessions:get', () => watcher.list());
 ipcMain.handle('session:live', (_evt, sessionId) => watcher.isLive(sessionId));
-// Agent-chat group history (remote LAN logger; offline-safe).
-ipcMain.handle('groupHistory:fetch', (_evt, { group, limit }) =>
-  agentChatHistory.fetchHistory(group, limit)
-);
+// ---- IPC: agent bulletin board (local files, see bulletinStore.js) ----
+ipcMain.handle('bulletin:list', () => ({
+  notes: bulletinStore.listNotes(),
+  cursors: bulletinStore.listCursors(),
+}));
+ipcMain.handle('bulletin:post', (_evt, input) => bulletinStore.postNote(input));
+ipcMain.handle('bulletin:delete', (_evt, id) => bulletinStore.deleteNote(id));
+ipcMain.handle('bulletin:delete-topic', (_evt, slug) => bulletinStore.deleteTopic(slug));
+// Payload-free change signal; the renderer re-invokes bulletin:list (avoids
+// ordering races between pushed payloads and in-flight list replies).
+bulletinStore.watch(() => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bulletin:changed');
+});
 // Renderer pushes the computed deck view; the local API serves it verbatim.
 ipcMain.on('deck:publish', (_evt, snapshot) => {
   if (snapshot && Array.isArray(snapshot.items)) deckSnapshot = snapshot;
@@ -382,6 +391,7 @@ app.on('window-all-closed', () => {
   ptys.killAll();
   watcher.stop();
   closeAllTranscriptWatchers();
+  bulletinStore.close();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -389,6 +399,7 @@ app.on('before-quit', () => {
   ptys.killAll();
   watcher.stop();
   closeAllTranscriptWatchers();
+  bulletinStore.close();
   if (api) {
     try {
       api.close();
