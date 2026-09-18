@@ -162,11 +162,18 @@ function postNote(input) {
     replyTo,
     to: input && input.to ? slugify(input.to) : null,
   };
-  ensureDirs();
   const file = path.join(NOTES_DIR, note.id + '.json');
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(note, null, 2));
-  fs.renameSync(tmp, file); // atomic on same volume
+  try {
+    ensureDirs();
+    fs.writeFileSync(tmp, JSON.stringify(note, null, 2));
+    fs.renameSync(tmp, file); // atomic on same volume
+  } catch (_) {
+    try {
+      fs.unlinkSync(tmp); // don't leave a stray .tmp behind
+    } catch (_) {}
+    return { error: 'write_failed' };
+  }
   arm();
   return { ok: true, id: note.id };
 }
@@ -196,4 +203,4 @@ function deleteTopic(slug) {
   return { ok: true, removed };
 }
 
-module.exports = { listNotes, listCursors, postNote, deleteNote, deleteTopic, watch, close, slugify };
+module.exports = { listNotes, listCursors, postNote, deleteNote, deleteTopic, watch, close };

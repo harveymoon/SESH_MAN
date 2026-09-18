@@ -131,8 +131,8 @@ function messageText(msg) {
   return '';
 }
 
-function parseTranscript(file) {
-  const meta = {
+function newTranscriptMeta() {
+  return {
     cwd: null,
     aiTitle: null,
     lastPrompt: null,
@@ -153,13 +153,14 @@ function parseTranscript(file) {
     model: '', // model id from the most recent assistant turn (e.g. claude-fable-5)
     color: null, // named color from the last /color command (red, purple, ...)
   };
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (_) {
-    return meta;
-  }
-  for (const line of raw.split('\n')) {
+}
+
+// Fold a chunk of jsonl text into meta. Every field either accumulates
+// (messageCount, first/lastActivity) or is last-wins (titles, model, color,
+// lastMessage) — which is what makes incremental parsing possible: appended
+// lines fold into the cached meta without re-reading the whole file.
+function applyTranscriptLines(meta, text) {
+  for (const line of text.split('\n')) {
     if (!line) continue;
     let r;
     try {
@@ -176,8 +177,10 @@ function parseTranscript(file) {
     else if (r.type === 'last-prompt' && r.lastPrompt) meta.lastPrompt = r.lastPrompt;
     else if (r.type === 'user' || r.type === 'assistant') {
       meta.messageCount++;
-      const text = messageText(r.message);
-      if (text && text.trim()) meta.lastMessage = { role: r.type, text: text.trim() };
+      const text2 = messageText(r.message);
+      // Cap the preview: it rides every scan diff + IPC push, and the UI clamps
+      // to a few lines anyway.
+      if (text2 && text2.trim()) meta.lastMessage = { role: r.type, text: text2.trim().slice(0, 500) };
       if (r.timestamp) {
         const mt = Date.parse(r.timestamp);
         if (mt > meta.lastMessageActivity) meta.lastMessageActivity = mt;
@@ -204,14 +207,60 @@ function parseTranscript(file) {
       if (t && (!meta.firstActivity || t < meta.firstActivity)) meta.firstActivity = t;
     }
   }
-  return meta;
 }
 
-function getTranscriptMeta(file, mtimeMs) {
+// Only complete lines (up to the last \n) are folded in; the byte offset of
+// that newline is returned so the next pass resumes there. A partial tail
+// (file mid-write) is left for the next pass instead of being half-parsed.
+function completePrefixBytes(text) {
+  const lastNl = text.lastIndexOf('\n');
+  return lastNl === -1 ? 0 : Buffer.byteLength(text.slice(0, lastNl + 1), 'utf8');
+}
+
+function parseTranscript(file) {
+  const meta = newTranscriptMeta();
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (_) {
+    return { meta, processed: 0 };
+  }
+  const processed = completePrefixBytes(raw);
+  applyTranscriptLines(meta, raw); // partial tail lines fail JSON.parse harmlessly
+  return { meta, processed };
+}
+
+// Incremental, mtime-cached transcript meta. Steady state for an ACTIVE
+// session used to be a full multi-MB read+parse on the main thread every scan
+// tick; now only the appended bytes since the last processed offset are read.
+// A shrink (rewrite/compaction) falls back to a full re-parse.
+function getTranscriptMeta(file, mtimeMs, size) {
   const cached = transcriptCache.get(file);
   if (cached && cached.mtimeMs === mtimeMs) return cached.meta;
-  const meta = parseTranscript(file);
-  transcriptCache.set(file, { mtimeMs, meta });
+  if (cached && cached.processed > 0 && size >= cached.processed) {
+    try {
+      const want = size - cached.processed;
+      let chunk = '';
+      if (want > 0) {
+        const fd = fs.openSync(file, 'r');
+        try {
+          const buf = Buffer.alloc(want);
+          const got = fs.readSync(fd, buf, 0, want, cached.processed);
+          chunk = buf.toString('utf8', 0, got);
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+      const done = completePrefixBytes(chunk);
+      if (done > 0) applyTranscriptLines(cached.meta, chunk.slice(0, chunk.lastIndexOf('\n') + 1));
+      transcriptCache.set(file, { mtimeMs, processed: cached.processed + done, meta: cached.meta });
+      return cached.meta;
+    } catch (_) {
+      /* fall through to a full re-parse */
+    }
+  }
+  const { meta, processed } = parseTranscript(file);
+  transcriptCache.set(file, { mtimeMs, processed, meta });
   return meta;
 }
 
@@ -267,10 +316,14 @@ class SessionWatcher extends EventEmitter {
   async start() {
     // Guard against double-start: without this a second start() without an
     // intervening stop() would overwrite the interval handles and leak them
-    // (the old intervals would poll forever).
+    // (the old intervals would poll forever). The generation token closes the
+    // await gap: two overlapping start() calls both pass stop(), but only the
+    // newest one is allowed to install intervals.
     this.stop();
+    const gen = (this._gen = (this._gen || 0) + 1);
     await this.proc.refresh();
     await this.scan();
+    if (this._gen !== gen) return this; // a newer start() superseded us mid-await
     this._timer = setInterval(() => this.scan(), this.pollMs);
     this._procTimer = setInterval(() => this.proc.refresh().then(() => this.scan()), this.procMs);
     return this;
@@ -286,6 +339,7 @@ class SessionWatcher extends EventEmitter {
     const now = Date.now();
     const sessionFiles = readSessionFiles();
     const sessions = [];
+    const seenFiles = new Set(); // for cache eviction below
 
     let projectDirs = [];
     try {
@@ -315,7 +369,8 @@ class SessionWatcher extends EventEmitter {
         const sf = sessionFiles.get(sessionId);
 
         // Show every session — no time filter. The UI groups them by age.
-        const meta = getTranscriptMeta(file, st.mtimeMs);
+        seenFiles.add(file);
+        const meta = getTranscriptMeta(file, st.mtimeMs, st.size);
         // matches() guards against PID reuse; isAliveNow() flips to dead the
         // instant a process exits (vs. the ~4s process-list cache).
         const running = sf ? this.proc.matches(sf.pid, sf.startedAt) && isAliveNow(sf.pid) : false;
@@ -351,6 +406,12 @@ class SessionWatcher extends EventEmitter {
       }
     }
 
+    // Evict cache entries for transcripts that no longer exist (deleted or
+    // rotated) so the cache stays bounded to files actually on disk.
+    for (const k of transcriptCache.keys()) {
+      if (!seenFiles.has(k)) transcriptCache.delete(k);
+    }
+
     // Pure recency: most recently active first, regardless of run state.
     sessions.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
     return sessions;
@@ -382,8 +443,6 @@ class SessionWatcher extends EventEmitter {
 
 module.exports = {
   SessionWatcher,
-  SESSIONS_DIR,
-  PROJECTS_DIR,
   findTranscript,
   readTranscriptMessages,
 };

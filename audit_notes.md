@@ -3,6 +3,8 @@
 Automated review 2026-06-10. Items for the dev to address when time permits.
 
 > **Status: all 8 resolved 2026-06-12.** Fixes below.
+> *(Historical note, 2026-09: `agentChatHistory.js` referenced in item 6 was later
+> deleted along with the whole group-chat feature — the bulletin board replaced it.)*
 > 1. `apiServer.js` — dropped wildcard CORS, removed `?t=` query-token, Bearer-only with `crypto.timingSafeEqual`. Desk_Deck client already used the Bearer header (no client code change needed); `DESK_DECK_INTEGRATION.md` updated.
 > 2. `main.js`/`sessionWatcher.js` — `'update'` listener registered once at module scope; `start()` now calls `stop()` first (re-entry guard).
 > 3. `ptyManager.start` wraps `pty.spawn`; `spawnTerminal` try/catches the invoke, shows the error inline, then disposes the terminal + removes the pane.

@@ -286,6 +286,16 @@ function bucketOf(ms) {
   return BUCKETS.findIndex((b) => ageH < b.maxH);
 }
 
+// Space-joined, quoted-if-needed absolute paths from a drag-drop event.
+// (Electron exposes .path on dropped File objects.)
+function droppedPaths(e) {
+  return Array.from(e.dataTransfer.files || [])
+    .map((f) => f.path)
+    .filter(Boolean)
+    .map((p) => (/\s/.test(p) ? '"' + p + '"' : p))
+    .join(' ');
+}
+
 function relTime(ms) {
   if (!ms) return '';
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -402,6 +412,11 @@ function update(sessions) {
     if (s.pid && !sessionToPty.has(s.sessionId)) {
       for (const [key, e] of terms) {
         if (!e.isLog && !e.exited && e.osPid === s.pid) {
+          // A resume fork changes the id: drop the old id's mapping so it
+          // can't dangle (or later delete a mapping owned by another tab).
+          if (e.sessionId && sessionToPty.get(e.sessionId) === key) {
+            sessionToPty.delete(e.sessionId);
+          }
           e.sessionId = s.sessionId;
           sessionToPty.set(s.sessionId, key);
           break;
@@ -488,17 +503,7 @@ function renderList(shown) {
     // (addressed --to it, or replies to its own notes). Clears automatically
     // once the session's read-cursor passes them.
     const boardPending = boardAttentionFor(s);
-    if (boardPending.length) {
-      const badge = document.createElement('span');
-      badge.className = 'board-badge';
-      badge.textContent = '▤ ' + boardPending.length;
-      badge.title = 'board: ' + boardPending.length + ' unread note(s) for this session';
-      badge.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openBoardAt(boardPending[boardPending.length - 1].topic);
-      });
-      el.querySelector('.session-meta').appendChild(badge);
-    }
+    if (boardPending.length) el.querySelector('.session-meta').appendChild(makeBoardBadge(boardPending));
 
     el.addEventListener('click', () => openSession(s));
     el.addEventListener('contextmenu', (e) => {
@@ -628,6 +633,20 @@ function boardAttentionFor(s) {
     if (directed && n.id > (cursor[n.topic] || '')) out.push(n);
   }
   return out;
+}
+
+// ▤N chip shared by sidebar rows and grid cards. Click -> open the board on
+// the newest pending note's topic.
+function makeBoardBadge(boardPending) {
+  const badge = document.createElement('span');
+  badge.className = 'board-badge';
+  badge.textContent = '▤ ' + boardPending.length;
+  badge.title = 'board: ' + boardPending.length + ' unread note(s) for this session';
+  badge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openBoardAt(boardPending[boardPending.length - 1].topic);
+  });
+  return badge;
 }
 
 function saveBoardLastSeen() {
@@ -844,6 +863,7 @@ function renderBoard() {
     boardToEl.appendChild(opt);
   }
   boardToEl.value = prevTo;
+  if (boardToEl.selectedIndex < 0) boardToEl.value = ''; // prior target gone -> "to: anyone"
   if (!boardTopicInputEl.value && boardTopic) boardTopicInputEl.value = boardTopic;
 
   // Thread: top-level notes chronologically; replies indented under their
@@ -973,17 +993,7 @@ function renderGrid(shown) {
 
     // Board-mail badge (same rule as the sidebar rows).
     const boardPending = boardAttentionFor(s);
-    if (boardPending.length) {
-      const badge = document.createElement('span');
-      badge.className = 'board-badge';
-      badge.textContent = '▤ ' + boardPending.length;
-      badge.title = 'board: ' + boardPending.length + ' unread note(s) for this session';
-      badge.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openBoardAt(boardPending[boardPending.length - 1].topic);
-      });
-      card.querySelector('.card-sub').appendChild(badge);
-    }
+    if (boardPending.length) card.querySelector('.card-sub').appendChild(makeBoardBadge(boardPending));
 
     card.addEventListener('click', () => {
       setGridMode(false);
@@ -1009,12 +1019,32 @@ function setGridMode(on) {
 //    anywhere, the log carries a "resume here" button to start it as a terminal.
 //    (We never auto-resume — that avoids forking a session that's live elsewhere.)
 async function openSession(session) {
-  const hostedKey = hostedKeyFor(session); // matches click-opened AND in-app-spawned terminals
+  // Already open here (live terminal OR read-only log) -> just focus it.
+  // Without the log check, every click on a stopped session stacked another
+  // orphaned log pane. Exited terminals fall through to a fresh log view.
+  const openTabFor = (id) => {
+    const key = sessionToPty.get(id);
+    const e = key != null ? terms.get(key) : null;
+    return e && (e.isLog || !e.exited) ? key : null;
+  };
+  const existing = openTabFor(session.sessionId);
+  if (existing != null) {
+    focusTab(existing);
+    return;
+  }
+  const hostedKey = hostedKeyFor(session); // also matches in-app-spawned terminals by pid
   if (hostedKey != null) {
     focusTab(hostedKey);
     return;
   }
   const live = await window.api.isSessionLive(session.sessionId);
+  // Two rapid clicks can both pass the guards above before either opened its
+  // tab — re-check after the await so we don't create a duplicate.
+  const raced = openTabFor(session.sessionId);
+  if (raced != null) {
+    focusTab(raced);
+    return;
+  }
   openLogView(session, live);
 }
 
@@ -1135,7 +1165,13 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     const msg = (e && e.message ? e.message : String(e)).replace(/^Error:\s*/, '');
     term.write('\r\n\x1b[31m  Could not start session:\x1b[0m\r\n  ' + msg + '\r\n');
     term.write('\r\n\x1b[90m  Check that the claude CLI is installed and on your PATH.\x1b[0m\r\n');
-    // Keep the message visible briefly, then dispose and remove the pane.
+    // Make the error pane actually VISIBLE (.term-pane is display:none without
+    // .active, and focusTab only runs on the success path).
+    const prevActive = activePtyId;
+    for (const t of terms.values()) t.pane.classList.remove('active');
+    pane.classList.add('active');
+    emptyStateEl.style.display = 'none';
+    // Keep the message visible briefly, then dispose and restore the prior view.
     setTimeout(() => {
       try {
         term.dispose();
@@ -1143,6 +1179,8 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
         /* already gone */
       }
       pane.remove();
+      if (prevActive != null && terms.has(prevActive)) focusTab(prevActive);
+      else if (!terms.size) emptyStateEl.style.display = '';
     }, 6000);
     return;
   }
@@ -1206,11 +1244,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   pane.addEventListener('drop', (e) => {
     e.preventDefault();
     pane.classList.remove('drop-target');
-    const paths = Array.from(e.dataTransfer.files || [])
-      .map((f) => f.path) // Electron exposes the absolute path on dropped files
-      .filter(Boolean)
-      .map((p) => (/\s/.test(p) ? '"' + p + '"' : p)) // quote paths with spaces
-      .join(' ');
+    const paths = droppedPaths(e);
     if (paths) {
       window.api.sendInput(ptyId, paths + ' '); // insert at cursor, no submit
       term.focus();
@@ -1327,7 +1361,11 @@ function closeTab(key) {
   }
   entry.pane.remove();
   terms.delete(key);
-  if (entry.sessionId) sessionToPty.delete(entry.sessionId);
+  // Only drop the mapping if it still points at THIS tab (a duplicate open or
+  // adoption may have repointed it at another live tab).
+  if (entry.sessionId && sessionToPty.get(entry.sessionId) === key) {
+    sessionToPty.delete(entry.sessionId);
+  }
 
   if (activePtyId === key) {
     activePtyId = null;
@@ -1541,15 +1579,19 @@ function isZoomKey(e) {
   const k = e.key;
   return k === '=' || k === '+' || k === '-' || k === '_' || k === '0';
 }
-function setFontSize(px) {
+// persist=false is for restore paths (startup default + settings load): the
+// startup call runs BEFORE loadSettings resolves, and main handles the IPC in
+// order — so an unconditional save here overwrote the user's stored size with
+// the default on every launch before it was ever read.
+function setFontSize(px, persist = true) {
   termFontSize = Math.max(8, Math.min(28, px));
-  window.api.saveSettings({ fontSize: termFontSize }); // persisted to disk
+  if (persist) window.api.saveSettings({ fontSize: termFontSize }); // persisted to disk
   document.documentElement.style.setProperty('--log-font', termFontSize + 'px');
   for (const e of terms.values()) {
     if (!e.isLog) e.term.options.fontSize = termFontSize;
   }
   if (activePtyId != null) fitActive(activePtyId);
-  if (stSizeEl) stSizeEl.value = termFontSize; // keep the settings modal in sync
+  stSizeEl.value = termFontSize; // keep the settings modal in sync
 }
 
 // ---------- Settings modal (⚙) ----------
@@ -1588,11 +1630,11 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '-' || e.key === '_') setFontSize(termFontSize - 1);
   else setFontSize(termFontSize + 1);
 });
-setFontSize(termFontSize); // apply default until disk settings load
+setFontSize(termFontSize, false); // apply default until disk settings load
 // Restore persisted UI settings (font size, bookmarks) from disk.
 window.api.loadSettings().then((s) => {
   if (!s) return;
-  if (typeof s.fontSize === 'number') setFontSize(s.fontSize);
+  if (typeof s.fontSize === 'number') setFontSize(s.fontSize, false);
   if (typeof s.termFont === 'string' && s.termFont) setTermFont(s.termFont);
   if (s.theme === 'light') setTheme('light');
   if (Array.isArray(s.bookmarks)) bookmarks = s.bookmarks;
@@ -1615,16 +1657,12 @@ function activeTermEntry() {
 function saveQueues() {
   window.api.saveQueues(queues); // persisted to disk by the main process
 }
-// The queue belongs to the session in the active pane.
-function currentSessionId() {
-  return activeSessionId();
-}
 function updateQueueTarget() {
   const e = activeTermEntry();
   if (e) {
     queueTargetEl.innerHTML = 'queue for → <b></b>';
     queueTargetEl.querySelector('b').textContent = e.label;
-  } else if (currentSessionId()) {
+  } else if (activeSessionId()) {
     queueTargetEl.textContent = 'read-only — draft now, “resume here” to send';
   } else {
     queueTargetEl.textContent = 'open a session to queue prompts';
@@ -1650,7 +1688,7 @@ function sendPrompt(text) {
 }
 function renderQueue() {
   queueListEl.innerHTML = '';
-  const sid = currentSessionId();
+  const sid = activeSessionId();
   if (!sid) {
     queueListEl.innerHTML = '<div class="queue-empty">Open a session to queue prompts for it.</div>';
     return;
@@ -1664,127 +1702,121 @@ function renderQueue() {
 }
 
 function buildQueueItem(sid, i, text, canSend, isDraft) {
-  {
-    const item = document.createElement('div');
-    item.className = 'queue-item' + (isDraft ? ' draft' : '');
+  const item = document.createElement('div');
+  item.className = 'queue-item' + (isDraft ? ' draft' : '');
 
-    const ta = document.createElement('textarea');
-    ta.className = 'queue-text';
-    ta.value = text;
-    ta.placeholder = isDraft ? 'Write a prompt… (queues as you type)' : 'Write a prompt…';
-    ta.rows = 1;
-    const autoGrow = () => {
-      ta.style.height = 'auto';
-      ta.style.height = ta.scrollHeight + 'px';
-    };
-    ta.addEventListener('input', () => {
-      if (!queues[sid]) queues[sid] = [];
-      if (item.classList.contains('draft')) {
-        if (!ta.value) {
-          autoGrow();
-          return; // still an empty draft
-        }
-        // First keystroke promotes the draft to a real queue item IN PLACE
-        // (no re-render, so the caret stays) and grows a new draft below.
-        item.classList.remove('draft');
-        queues[sid].push(ta.value);
-        queueListEl.appendChild(buildQueueItem(sid, queues[sid].length, '', !!activeTermEntry(), true));
-      } else {
-        queues[sid][i] = ta.value;
+  const ta = document.createElement('textarea');
+  ta.className = 'queue-text';
+  ta.value = text;
+  ta.placeholder = isDraft ? 'Write a prompt… (queues as you type)' : 'Write a prompt…';
+  ta.rows = 1;
+  const autoGrow = () => {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  };
+  ta.addEventListener('input', () => {
+    if (!queues[sid]) queues[sid] = [];
+    if (item.classList.contains('draft')) {
+      if (!ta.value) {
+        autoGrow();
+        return; // still an empty draft
       }
-      saveQueues();
-      autoGrow();
-    });
-    // Drop a file onto a prompt box -> insert its path at the cursor.
-    ta.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      item.classList.add('drop-target');
-    });
-    ta.addEventListener('dragleave', () => item.classList.remove('drop-target'));
-    ta.addEventListener('drop', (e) => {
-      e.preventDefault();
-      item.classList.remove('drop-target');
-      const paths = Array.from(e.dataTransfer.files || [])
-        .map((f) => f.path)
-        .filter(Boolean)
-        .map((p) => (/\s/.test(p) ? '"' + p + '"' : p))
-        .join(' ');
-      if (!paths) return;
-      const s = ta.selectionStart ?? ta.value.length;
-      const en = ta.selectionEnd ?? ta.value.length;
-      ta.value = ta.value.slice(0, s) + paths + ta.value.slice(en);
-      ta.selectionStart = ta.selectionEnd = s + paths.length;
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+      // First keystroke promotes the draft to a real queue item IN PLACE
+      // (no re-render, so the caret stays) and grows a new draft below.
+      item.classList.remove('draft');
+      queues[sid].push(ta.value);
+      queueListEl.appendChild(buildQueueItem(sid, queues[sid].length, '', !!activeTermEntry(), true));
+    } else {
+      queues[sid][i] = ta.value;
+    }
+    saveQueues();
+    autoGrow();
+  });
+  // Drop a file onto a prompt box -> insert its path at the cursor.
+  ta.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    item.classList.add('drop-target');
+  });
+  ta.addEventListener('dragleave', () => item.classList.remove('drop-target'));
+  ta.addEventListener('drop', (e) => {
+    e.preventDefault();
+    item.classList.remove('drop-target');
+    const paths = droppedPaths(e);
+    if (!paths) return;
+    const s = ta.selectionStart ?? ta.value.length;
+    const en = ta.selectionEnd ?? ta.value.length;
+    ta.value = ta.value.slice(0, s) + paths + ta.value.slice(en);
+    ta.selectionStart = ta.selectionEnd = s + paths.length;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 
-    const actions = document.createElement('div');
-    actions.className = 'queue-actions';
+  const actions = document.createElement('div');
+  actions.className = 'queue-actions';
 
-    const star = document.createElement('button');
-    star.className = 'q-star';
-    star.textContent = '★';
-    star.title = 'Save as a reusable prompt';
-    star.addEventListener('click', () => {
-      if (item.querySelector('.bm-form')) return; // form already open
-      const form = document.createElement('div');
-      form.className = 'bm-form';
-      const nameInput = document.createElement('input');
-      nameInput.className = 'bm-name';
-      nameInput.placeholder = 'bookmark name';
-      nameInput.value = ta.value.trim().slice(0, 24);
-      const save = document.createElement('button');
-      save.className = 'bm-save';
-      save.textContent = 'save ★';
-      const cancel = document.createElement('button');
-      cancel.textContent = '×';
-      const commit = () => {
-        if (ta.value.trim()) addBookmark(nameInput.value, ta.value);
-        form.remove();
-      };
-      save.addEventListener('click', commit);
-      cancel.addEventListener('click', () => form.remove());
-      nameInput.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') commit();
-        else if (ev.key === 'Escape') form.remove();
-      });
-      form.appendChild(nameInput);
-      form.appendChild(save);
-      form.appendChild(cancel);
-      item.appendChild(form);
-      nameInput.focus();
-      nameInput.select();
+  const star = document.createElement('button');
+  star.className = 'q-star';
+  star.textContent = '★';
+  star.title = 'Save as a reusable prompt';
+  star.addEventListener('click', () => {
+    if (item.querySelector('.bm-form')) return; // form already open
+    const form = document.createElement('div');
+    form.className = 'bm-form';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'bm-name';
+    nameInput.placeholder = 'bookmark name';
+    nameInput.value = ta.value.trim().slice(0, 24);
+    const save = document.createElement('button');
+    save.className = 'bm-save';
+    save.textContent = 'save ★';
+    const cancel = document.createElement('button');
+    cancel.textContent = '×';
+    const commit = () => {
+      if (ta.value.trim()) addBookmark(nameInput.value, ta.value);
+      form.remove();
+    };
+    save.addEventListener('click', commit);
+    cancel.addEventListener('click', () => form.remove());
+    nameInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') commit();
+      else if (ev.key === 'Escape') form.remove();
     });
+    form.appendChild(nameInput);
+    form.appendChild(save);
+    form.appendChild(cancel);
+    item.appendChild(form);
+    nameInput.focus();
+    nameInput.select();
+  });
 
-    const del = document.createElement('button');
-    del.className = 'q-del';
-    del.textContent = 'delete';
-    del.addEventListener('click', () => {
-      if (item.classList.contains('draft')) return; // draft isn't in the array
+  const del = document.createElement('button');
+  del.className = 'q-del';
+  del.textContent = 'delete';
+  del.addEventListener('click', () => {
+    if (item.classList.contains('draft')) return; // draft isn't in the array
+    queues[sid].splice(i, 1);
+    saveQueues();
+    renderQueue();
+  });
+  const send = document.createElement('button');
+  send.className = 'q-send';
+  send.textContent = 'send ▸';
+  send.disabled = !canSend; // read-only/no session: draft only
+  send.title = canSend ? 'Send to the active session' : 'Resume the session to send';
+  send.addEventListener('click', () => {
+    if (item.classList.contains('draft')) return; // draft isn't in the array
+    if (sendPrompt(ta.value)) {
       queues[sid].splice(i, 1);
       saveQueues();
       renderQueue();
-    });
-    const send = document.createElement('button');
-    send.className = 'q-send';
-    send.textContent = 'send ▸';
-    send.disabled = !canSend; // read-only/no session: draft only
-    send.title = canSend ? 'Send to the active session' : 'Resume the session to send';
-    send.addEventListener('click', () => {
-      if (item.classList.contains('draft')) return; // draft isn't in the array
-      if (sendPrompt(ta.value)) {
-        queues[sid].splice(i, 1);
-        saveQueues();
-        renderQueue();
-      }
-    });
-    actions.appendChild(star);
-    actions.appendChild(del);
-    actions.appendChild(send);
-    item.appendChild(ta);
-    item.appendChild(actions);
-    requestAnimationFrame(autoGrow); // size to content once attached to the DOM
-    return item;
-  }
+    }
+  });
+  actions.appendChild(star);
+  actions.appendChild(del);
+  actions.appendChild(send);
+  item.appendChild(ta);
+  item.appendChild(actions);
+  requestAnimationFrame(autoGrow); // size to content once attached to the DOM
+return item;
 }
 
 queueToggleEl.addEventListener('click', () => {
@@ -1846,7 +1878,7 @@ function addBookmark(name, text) {
 }
 function insertBookmark(id) {
   const b = bookmarks.find((x) => x.id === id);
-  const sid = currentSessionId();
+  const sid = activeSessionId();
   if (!b || !sid) return;
   if (!queues[sid]) queues[sid] = [];
   queues[sid].push(b.text);

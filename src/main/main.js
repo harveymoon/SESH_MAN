@@ -111,7 +111,6 @@ app.disableHardwareAcceleration();
 // Windows taskbar grouping / stable identity (esp. important when run unpackaged).
 if (process.platform === 'win32') app.setAppUserModelId('com.harveymoon.seshman');
 app.on('child-process-gone', (_e, details) => logLine('CHILD gone: ' + JSON.stringify(details)));
-app.on('gpu-process-crashed', (_e, killed) => logLine('GPU crashed killed=' + killed));
 
 let mainWindow = null;
 let rendererCrashes = []; // timestamps of recent renderer crashes (reload-loop guard)
@@ -153,6 +152,13 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+  // Bulletin-board change signal (payload-free; renderer re-invokes
+  // bulletin:list). watch() is idempotent, and registering here (not module
+  // scope) revives the signal after window-all-closed ran bulletinStore.close().
+  bulletinStore.watch(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bulletin:changed');
+  });
+
   // Capture renderer crashes and console errors. On a real crash, reload the
   // window so the UI self-heals instead of leaving a dead app — but bail out if
   // it's crash-looping (would otherwise reload forever).
@@ -169,6 +175,9 @@ function createWindow() {
       return;
     }
     logLine('RENDERER auto-reloading after crash (#' + rendererCrashes.length + ' this minute)');
+    // The reloaded renderer starts fresh and will never transcript:close the
+    // old renderer's watchers — free them now or they read+push forever.
+    closeAllTranscriptWatchers();
     try {
       mainWindow.webContents.reload();
     } catch (e) {
@@ -226,11 +235,8 @@ ipcMain.handle('bulletin:list', () => ({
 ipcMain.handle('bulletin:post', (_evt, input) => bulletinStore.postNote(input));
 ipcMain.handle('bulletin:delete', (_evt, id) => bulletinStore.deleteNote(id));
 ipcMain.handle('bulletin:delete-topic', (_evt, slug) => bulletinStore.deleteTopic(slug));
-// Payload-free change signal; the renderer re-invokes bulletin:list (avoids
-// ordering races between pushed payloads and in-flight list replies).
-bulletinStore.watch(() => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bulletin:changed');
-});
+// (The change-signal watcher is registered in createWindow — bulletinStore
+// .close() runs on window-all-closed, so a macOS re-activate must re-watch.)
 // Renderer pushes the computed deck view; the local API serves it verbatim.
 ipcMain.on('deck:publish', (_evt, snapshot) => {
   if (snapshot && Array.isArray(snapshot.items)) deckSnapshot = snapshot;
@@ -239,13 +245,17 @@ ipcMain.on('deck:publish', (_evt, snapshot) => {
 ipcMain.on('deck:bookmarks', (_evt, items) => {
   deckBookmarks = { items: Array.isArray(items) ? items : [] };
 });
-// Renderer's reply to a forwarded prompt-injection request.
-ipcMain.on('deck:prompt-result', (_evt, { reqId, status, body }) => {
+// Renderer's reply to a forwarded prompt-injection request. Status is clamped
+// to a valid HTTP range before it reaches res.writeHead in the API server.
+ipcMain.on('deck:prompt-result', (_evt, payload) => {
+  if (!payload || typeof payload !== 'object') return;
+  const { reqId, status, body } = payload;
   const p = pendingPrompts.get(reqId);
   if (!p) return;
   clearTimeout(p.timer);
   pendingPrompts.delete(reqId);
-  p.resolve({ status, body });
+  const st = Number(status);
+  p.resolve({ status: st >= 200 && st <= 599 ? st : 500, body });
 });
 // Clipboard — done in main because the sandboxed renderer/preload can't access
 // the clipboard module. Sync read so callers can insert at the cursor inline.
@@ -267,6 +277,11 @@ ipcMain.handle('dialog:pickFolder', async () => {
 
 // ---- IPC: pty lifecycle ----
 ipcMain.handle('pty:start', (_evt, opts) => {
+  if (!opts || typeof opts !== 'object') throw new Error('bad pty:start payload');
+  // A resume id lands in claude's argv — gate it like every other session id.
+  if (opts.sessionId != null && !isValidSessionId(opts.sessionId)) {
+    throw new Error('invalid session id');
+  }
   return ptys.start(opts, {
     onData: (id, data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -281,12 +296,18 @@ ipcMain.handle('pty:start', (_evt, opts) => {
   });
 });
 
-ipcMain.on('pty:input', (_evt, { id, data }) => ptys.write(id, data));
-ipcMain.on('pty:resize', (_evt, { id, cols, rows }) => ptys.resize(id, cols, rows));
+ipcMain.on('pty:input', (_evt, p) => {
+  if (p && typeof p === 'object') ptys.write(p.id, p.data);
+});
+ipcMain.on('pty:resize', (_evt, p) => {
+  if (p && typeof p === 'object') ptys.resize(p.id, p.cols, p.rows);
+});
 ipcMain.on('pty:kill', (_evt, id) => ptys.kill(id));
 
 // ---- IPC: read-only transcript log ----
-ipcMain.handle('transcript:open', (_evt, { sessionId, cwd }) => {
+ipcMain.handle('transcript:open', (_evt, p) => {
+  if (!p || typeof p !== 'object') return { messages: [] };
+  const { sessionId, cwd } = p;
   if (!isValidSessionId(sessionId)) return { messages: [] };
   const file = findTranscript(sessionId, cwd);
   if (!file) return { messages: [] };

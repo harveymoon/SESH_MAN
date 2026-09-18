@@ -70,15 +70,27 @@ function start(opts) {
   const token = ensureToken(tokenFile);
 
   const server = http.createServer((req, res) => {
+    const json = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      handle(req, res, json);
+    } catch (e) {
+      // A malformed request-target or bad percent-encoding must produce a
+      // response, not an uncaught throw that leaves the socket hanging.
+      log('API handler threw: ' + e.message);
+      if (!res.headersSent) json(400, { error: 'bad_request', message: 'malformed request' });
+      else res.end();
+    }
+  });
+
+  function handle(req, res, json) {
     // No CORS headers: this is a loopback control surface for native clients
     // (Desk_Deck etc.), not a browser API. Omitting Access-Control-Allow-Origin
     // means a web page in the user's browser can't read our responses, so it
     // can't fingerprint the app or (if the token leaked) drive it.
     const url = new URL(req.url, 'http://127.0.0.1');
-    const json = (code, obj) => {
-      res.writeHead(code, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(obj));
-    };
 
     // status — no auth (availability probe)
     if (req.method === 'GET' && url.pathname === '/api/status') {
@@ -146,7 +158,7 @@ function start(opts) {
     }
 
     json(404, { error: 'not_found', message: 'unknown endpoint' });
-  });
+  }
 
   server.on('error', (e) => log('API server error: ' + e.message));
   server.listen(port, '127.0.0.1', () => log('API listening on http://127.0.0.1:' + port));
