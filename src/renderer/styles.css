@@ -324,6 +324,20 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 0 10px -3px var(--accent);
 }
 
+/* /color session stripe. Border widths swap 1px->3px with padding compensated,
+   so colored rows don't shift layout. Declared after unread/needs-input; those
+   use outline/box-shadow, so the stripe coexists with both. */
+.session.colored {
+  border-left: 3px solid var(--session-color);
+  padding-left: 7px; /* 9px pad + 1px border == 7px pad + 3px stripe */
+  /* background-image (not the shorthand) so .selected's background-color still shows */
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--session-color) 7%, transparent), transparent 55%);
+}
+.card.colored {
+  border-left: 3px solid var(--session-color);
+  padding-left: 10px; /* 12px pad + 1px border == 10px pad + 3px stripe */
+}
+
 @keyframes attn-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }

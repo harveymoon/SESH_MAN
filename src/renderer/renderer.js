@@ -183,12 +183,53 @@ const LIGHT_THEME = {
   black: '#f4f4f1',
   brightBlack: '#9aa1ab',
 };
+// ---------- /color session colors ----------
+// Claude Code's /color writes "Session color set to: <name>" into the
+// transcript; the watcher surfaces it as session.color. Desaturated hexes to
+// sit with the theme; unknown names simply don't colorize.
+const SESSION_COLORS = {
+  red: '#c96a5f',
+  orange: '#c98a5a',
+  yellow: '#c9b45a',
+  green: '#6fae7a',
+  teal: '#5aa89b',
+  cyan: '#5fb3b3',
+  blue: '#6a93c9',
+  purple: '#9a7fc9',
+  magenta: '#c06ac0',
+  pink: '#c97fa8',
+  gray: '#8a919b',
+  grey: '#8a919b',
+  white: '#c4c8cf',
+};
+function sessionColorHex(s) {
+  return (s && s.color && SESSION_COLORS[s.color]) || null;
+}
+// Blend two '#rrggbb' colors; t=0 -> a, t=1 -> b.
+function hexBlend(a, b, t) {
+  const pa = a.slice(1).match(/../g).map((x) => parseInt(x, 16));
+  const pb = b.slice(1).match(/../g).map((x) => parseInt(x, 16));
+  return (
+    '#' +
+    pa.map((v, i) => Math.round(v + (pb[i] - v) * t).toString(16).padStart(2, '0')).join('')
+  );
+}
+
 // ---------- UI settings (persisted; editable in the ⚙ settings modal) ----------
 const DEFAULT_TERM_FONT = '"Cascadia Code", "JetBrains Mono", Consolas, monospace';
 let termFontFamily = DEFAULT_TERM_FONT;
 let uiTheme = 'dark';
 function termTheme() {
   return uiTheme === 'light' ? LIGHT_THEME : THEME;
+}
+// Terminal theme for a /color'd session: base theme with the background nudged
+// ~7% toward the session color (works on both the dark and light base).
+function themedFor(colorName) {
+  const base = termTheme();
+  const hex = colorName && SESSION_COLORS[colorName];
+  if (!hex) return base;
+  const bg = hexBlend(base.background, hex, 0.07);
+  return Object.assign({}, base, { background: bg, cursorAccent: bg, black: bg });
 }
 // A bare font name becomes a stack with a monospace fallback; a full
 // comma-separated stack is taken as-is; empty resets to the default.
@@ -212,7 +253,7 @@ function setTheme(mode) {
   window.api.saveSettings({ theme: uiTheme });
   document.body.classList.toggle('light', uiTheme === 'light');
   for (const e of terms.values()) {
-    if (!e.isLog) e.term.options.theme = termTheme();
+    if (!e.isLog) e.term.options.theme = themedFor(e.color); // keeps per-session tint
   }
 }
 
@@ -379,6 +420,11 @@ function renderList(shown) {
       (selected ? ' selected' : '') +
       (needsInput ? ' needs-input' : unread ? ' unread' : '') +
       (isArchived ? ' archived' : '');
+    const rowColor = sessionColorHex(s); // /color stripe
+    if (rowColor) {
+      el.classList.add('colored');
+      el.style.setProperty('--session-color', rowColor);
+    }
 
     el.innerHTML = `
       <div class="session-top">
@@ -872,6 +918,11 @@ function renderGrid(shown) {
     const card = document.createElement('div');
     card.className =
       'card ' + ds.stateClass + (needsInput ? ' needs-input' : '') + (waitingForYou ? ' waiting' : '');
+    const cardColor = sessionColorHex(s); // /color stripe
+    if (cardColor) {
+      card.classList.add('colored');
+      card.style.setProperty('--session-color', cardColor);
+    }
 
     const msg = s.lastMessage;
     card.innerHTML = `
@@ -1027,6 +1078,8 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   pane.className = 'term-pane';
   terminalsEl.appendChild(pane);
 
+  const sessColor =
+    (sessionId && (latestSessions.find((x) => x.sessionId === sessionId) || {}).color) || null;
   const term = new Terminal({
     fontFamily: termFontFamily,
     fontSize: termFontSize,
@@ -1034,7 +1087,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     letterSpacing: 0,
     cursorBlink: true,
     cursorStyle: 'bar',
-    theme: termTheme(),
+    theme: themedFor(sessColor),
     allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();
@@ -1141,7 +1194,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     }
   });
 
-  const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false };
+  const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false, color: sessColor };
   terms.set(ptyId, entry);
   if (sessionId) sessionToPty.set(sessionId, ptyId);
 
@@ -1167,6 +1220,12 @@ function refreshEntryLabels() {
       e.label = displayTitle(s);
       e.title = '▸ ' + s.project;
       e.model = s.model || '';
+      // /color mid-session -> retint the live terminal on the next tick.
+      const color = s.color || null;
+      if (color !== e.color) {
+        e.color = color;
+        if (!e.isLog && e.term) e.term.options.theme = themedFor(color);
+      }
     }
   }
 }

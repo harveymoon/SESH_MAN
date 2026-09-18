@@ -149,6 +149,7 @@ function parseTranscript(file) {
     lastMessageActivity: 0,
     lastMessage: null, // { role, text } of the most recent user/assistant message
     model: '', // model id from the most recent assistant turn (e.g. claude-fable-5)
+    color: null, // named color from the last /color command (red, purple, ...)
   };
   let raw;
   try {
@@ -183,6 +184,16 @@ function parseTranscript(file) {
       // mid-session /model switch shows up). Skip synthetic placeholder turns.
       if (r.type === 'assistant' && r.message && r.message.model && r.message.model !== '<synthetic>') {
         meta.model = r.message.model;
+      }
+    } else if (r.type === 'system' && typeof r.content === 'string' && r.content.includes('Session color')) {
+      // /color leaves a local_command stdout record in the transcript — the
+      // only place the chosen color is persisted. Last one wins.
+      const m = /Session color set to:\s*([a-zA-Z]+)/.exec(r.content);
+      if (m) {
+        const c = m[1].toLowerCase();
+        meta.color = c === 'none' || c === 'default' ? null : c;
+      } else if (/Session color (cleared|removed|reset)/i.test(r.content)) {
+        meta.color = null;
       }
     }
     if (r.timestamp) {
@@ -327,6 +338,7 @@ class SessionWatcher extends EventEmitter {
           lastActivity: Math.max(meta.lastActivity || 0, updatedAt, st.mtimeMs),
           lastMessageActivity: meta.lastMessageActivity || 0,
           model: meta.model || '',
+          color: meta.color || null,
           aiTitle: meta.aiTitle,
           lastPrompt: meta.lastPrompt,
           lastMessage: meta.lastMessage,
