@@ -1471,3 +1471,18 @@ body.resizing #queue-resize { background: var(--accent); opacity: 0.5; }
   overflow-y: auto;
 }
 .user-echo:hover .user-echo-text { color: var(--text); }
+
+/* ---- Queue reorder (drag the ≡ grip) ---- */
+.q-grip {
+  cursor: grab;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  user-select: none;
+}
+.q-grip:hover { color: var(--accent); }
+.q-grip:active { cursor: grabbing; }
+.queue-item.dragging { opacity: 0.35; }
+.queue-item.drop-above { box-shadow: 0 -2px 0 var(--accent); }
+.queue-item.drop-below { box-shadow: 0 2px 0 var(--accent); }

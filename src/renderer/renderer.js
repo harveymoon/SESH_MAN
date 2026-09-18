@@ -2146,9 +2146,45 @@ function renderQueue() {
   queueListEl.appendChild(buildQueueItem(sid, list.length, '', canSend, true));
 }
 
+// Index of the queue item currently being drag-reordered (null = none).
+let queueDragIndex = null;
+
 function buildQueueItem(sid, i, text, canSend, isDraft) {
   const item = document.createElement('div');
   item.className = 'queue-item' + (isDraft ? ' draft' : '');
+
+  // ---- reorder: every item is a drop target (draft slot = "move to end") ----
+  item.addEventListener('dragover', (e) => {
+    if (queueDragIndex == null) return; // not our drag (file drops handled on ta)
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const r = item.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    item.classList.toggle('drop-above', before && !isDraft);
+    item.classList.toggle('drop-below', !before || isDraft);
+  });
+  item.addEventListener('dragleave', () => item.classList.remove('drop-above', 'drop-below'));
+  item.addEventListener('drop', (e) => {
+    if (queueDragIndex == null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    item.classList.remove('drop-above', 'drop-below');
+    const from = queueDragIndex;
+    queueDragIndex = null;
+    if (!queues[sid] || queues[sid][from] == null) return;
+    const r = item.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    let to = isDraft ? queues[sid].length : i + (before ? 0 : 1);
+    if (from < to) to--; // removal shifts everything after `from` up one
+    if (to === from) {
+      renderQueue();
+      return;
+    }
+    const [moved] = queues[sid].splice(from, 1);
+    queues[sid].splice(to, 0, moved);
+    saveQueues();
+    renderQueue();
+  });
 
   const ta = document.createElement('textarea');
   ta.className = 'queue-text';
@@ -2179,11 +2215,13 @@ function buildQueueItem(sid, i, text, canSend, isDraft) {
   });
   // Drop a file onto a prompt box -> insert its path at the cursor.
   ta.addEventListener('dragover', (e) => {
+    if (queueDragIndex != null) return; // reorder drag, not a file drop
     e.preventDefault();
     item.classList.add('drop-target');
   });
   ta.addEventListener('dragleave', () => item.classList.remove('drop-target'));
   ta.addEventListener('drop', (e) => {
+    if (queueDragIndex != null) return; // handled by the item-level reorder drop
     e.preventDefault();
     item.classList.remove('drop-target');
     const paths = droppedPaths(e);
@@ -2233,6 +2271,24 @@ function buildQueueItem(sid, i, text, canSend, isDraft) {
     nameInput.select();
   });
 
+  const grip = document.createElement('span');
+  grip.className = 'q-grip';
+  grip.textContent = '≡';
+  grip.title = 'Drag to reorder';
+  grip.draggable = true;
+  grip.addEventListener('dragstart', (e) => {
+    queueDragIndex = i;
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(i)); // required on some platforms
+    e.dataTransfer.setDragImage(item, 12, 12);
+  });
+  grip.addEventListener('dragend', () => {
+    queueDragIndex = null;
+    item.classList.remove('dragging');
+    renderQueue(); // clears any stray drop markers
+  });
+
   const expand = document.createElement('button');
   expand.className = 'q-expand';
   expand.textContent = '⤢';
@@ -2264,6 +2320,7 @@ function buildQueueItem(sid, i, text, canSend, isDraft) {
       renderQueue();
     }
   });
+  actions.appendChild(grip);
   actions.appendChild(expand);
   actions.appendChild(star);
   actions.appendChild(del);
