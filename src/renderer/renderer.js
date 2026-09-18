@@ -249,6 +249,17 @@ function setTermFont(family) {
   }
   if (activePtyId != null) fitActive(activePtyId);
 }
+// App-wide UI font (sidebar, board, panels — everything but xterm, which has
+// its own setting). Overrides the --mono token; empty = the built-in default.
+// OpenDyslexic lands here for a dyslexia-friendly UI.
+let appFont = '';
+function setAppFont(family) {
+  appFont = (family || '').trim();
+  window.api.saveSettings({ uiFont: appFont });
+  if (!appFont) document.documentElement.style.removeProperty('--mono');
+  else document.documentElement.style.setProperty('--mono', normalizeFontStack(appFont));
+}
+
 function setTheme(mode) {
   uiTheme = mode === 'light' ? 'light' : 'dark';
   window.api.saveSettings({ theme: uiTheme });
@@ -1896,11 +1907,13 @@ const settingsModalEl = document.getElementById('settings-modal');
 const stCloseEl = document.getElementById('st-close');
 const stThemeEl = document.getElementById('st-theme');
 const stFontEl = document.getElementById('st-font');
+const stAppFontEl = document.getElementById('st-appfont');
 const stSizeEl = document.getElementById('st-size');
 
 function openSettingsModal() {
   stThemeEl.value = uiTheme;
   stFontEl.value = termFontFamily;
+  stAppFontEl.value = appFont;
   stSizeEl.value = termFontSize;
   settingsModalEl.classList.remove('hidden');
 }
@@ -1914,6 +1927,7 @@ stFontEl.addEventListener('change', () => {
   setTermFont(stFontEl.value);
   stFontEl.value = termFontFamily; // show the normalized stack that was applied
 });
+stAppFontEl.addEventListener('change', () => setAppFont(stAppFontEl.value)); // empty = default
 stSizeEl.addEventListener('change', () => {
   const v = parseInt(stSizeEl.value, 10);
   if (!Number.isNaN(v)) setFontSize(v);
@@ -1932,6 +1946,7 @@ window.api.loadSettings().then((s) => {
   if (!s) return;
   if (typeof s.fontSize === 'number') setFontSize(s.fontSize, false);
   if (typeof s.termFont === 'string' && s.termFont) setTermFont(s.termFont);
+  if (typeof s.uiFont === 'string' && s.uiFont) setAppFont(s.uiFont);
   if (s.theme === 'light') setTheme('light');
   if (Array.isArray(s.bookmarks)) bookmarks = s.bookmarks;
   if (Array.isArray(s.archived)) archived = new Set(s.archived);
