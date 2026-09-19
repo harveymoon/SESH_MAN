@@ -2478,14 +2478,46 @@ const inTodosWrapEl = document.getElementById('in-todos-wrap');
 const inTodosEl = document.getElementById('in-todos');
 const inThinkEl = document.getElementById('in-think');
 const inThinkCountEl = document.getElementById('in-think-count');
+const inToolsWrapEl = document.getElementById('in-tools-wrap');
 const inToolsEl = document.getElementById('in-tools');
 const inToolsCountEl = document.getElementById('in-tools-count');
+const inSplitEl = document.getElementById('in-split');
 const inAgentsWrapEl = document.getElementById('in-agents-wrap');
 const inAgentsEl = document.getElementById('in-agents');
 const inAgentsCountEl = document.getElementById('in-agents-count');
 const inEnvEl = document.getElementById('in-env');
 
 let lastInsightSid = null;
+
+// Thinking/tools fill the column's leftover height; the divider between them
+// sets the ratio (fraction that thinking gets). Persisted.
+let insightSplit = parseFloat(localStorage.getItem('seshman.insightSplit') || '0.45');
+if (!(insightSplit >= 0.15 && insightSplit <= 0.85)) insightSplit = 0.45;
+function applyInsightSplit() {
+  inThinkWrapEl.style.flex = insightSplit + ' 1 0';
+  inToolsWrapEl.style.flex = 1 - insightSplit + ' 1 0';
+}
+applyInsightSplit();
+let insightDrag = false;
+inSplitEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  insightDrag = true;
+  document.body.classList.add('resizing-v');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!insightDrag) return;
+  const top = inThinkWrapEl.getBoundingClientRect().top;
+  const bottom = inToolsWrapEl.getBoundingClientRect().bottom;
+  if (bottom - top < 100) return;
+  insightSplit = Math.max(0.15, Math.min(0.85, (e.clientY - top) / (bottom - top)));
+  applyInsightSplit();
+});
+window.addEventListener('mouseup', () => {
+  if (!insightDrag) return;
+  insightDrag = false;
+  document.body.classList.remove('resizing-v');
+  localStorage.setItem('seshman.insightSplit', insightSplit.toFixed(3));
+});
 
 function insightOpenNow() {
   return !insightPaneEl.classList.contains('collapsed');

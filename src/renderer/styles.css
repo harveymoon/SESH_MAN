@@ -1317,7 +1317,23 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#insight-body { flex: 1; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+#insight-body { flex: 1; min-height: 0; overflow: hidden; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+/* content-sized sections (capped); thinking/tools flex to fill the rest */
+#in-todos-wrap, #in-agents-wrap { flex: none; }
+#in-todos { max-height: 24vh; overflow-y: auto; }
+#in-agents { max-height: 110px; overflow-y: auto; }
+#in-think-wrap, #in-tools-wrap { display: flex; flex-direction: column; min-height: 70px; }
+#in-think-wrap .in-h, #in-tools-wrap .in-h { flex: none; }
+#in-split {
+  flex: none;
+  height: 7px;
+  margin: -2px 0;
+  cursor: ns-resize;
+  z-index: 2;
+}
+#in-split:hover { background: var(--accent); opacity: 0.35; }
+body.resizing-v { cursor: ns-resize; user-select: none; }
+body.resizing-v #in-split { background: var(--accent); opacity: 0.5; }
 .in-section { border: 1px solid var(--border); background: var(--bg); padding: 7px 9px; }
 .in-h {
   font-size: 8px;
@@ -1336,7 +1352,7 @@ body { display: flex; flex-direction: column; }
 .in-todo.in_progress { color: var(--text); }
 .in-todo.in_progress .in-todo-glyph { color: var(--accent); }
 
-#in-think { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+#in-think { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
 .in-think-block { border-left: 2px solid var(--border-2); padding-left: 7px; }
 .in-think-block.side { border-left-color: var(--busy); }
 .in-row-head { font-size: 8px; color: var(--faint); letter-spacing: 0.06em; margin-bottom: 2px; }
@@ -1349,7 +1365,7 @@ body { display: flex; flex-direction: column; }
   word-break: break-word;
 }
 
-#in-tools { max-height: 240px; overflow-y: auto; }
+#in-tools { flex: 1; min-height: 0; overflow-y: auto; }
 .in-tool { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; font-size: 9.5px; min-width: 0; }
 .in-dot { flex: none; width: 6px; height: 6px; align-self: center; background: var(--busy); }
 .in-tool.ok .in-dot { background: var(--idle); }
