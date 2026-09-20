@@ -223,13 +223,14 @@ let uiTheme = 'dark';
 function termTheme() {
   return uiTheme === 'light' ? LIGHT_THEME : THEME;
 }
-// Terminal theme for a /color'd session: base theme with the background nudged
-// ~7% toward the session color (works on both the dark and light base).
+// Terminal theme for a /color'd session: base theme with the background pushed
+// ~16% toward the session color — clearly visible at a glance (works on both
+// the dark and light base).
 function themedFor(colorName) {
   const base = termTheme();
   const hex = colorName && SESSION_COLORS[colorName];
   if (!hex) return base;
-  const bg = hexBlend(base.background, hex, 0.07);
+  const bg = hexBlend(base.background, hex, 0.16);
   return Object.assign({}, base, { background: bg, cursorAccent: bg, black: bg });
 }
 // A bare font name becomes a stack with a monospace fallback; a full
@@ -265,7 +266,11 @@ function setTheme(mode) {
   window.api.saveSettings({ theme: uiTheme });
   document.body.classList.toggle('light', uiTheme === 'light');
   for (const e of terms.values()) {
-    if (!e.isLog) e.term.options.theme = themedFor(e.color); // keeps per-session tint
+    if (!e.isLog) {
+      const th = themedFor(e.color); // keeps per-session tint across theme flips
+      e.term.options.theme = th;
+      e.pane.style.background = th.background;
+    }
   }
 }
 
@@ -1479,6 +1484,8 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
 
   const sessColor =
     (sessionId && (latestSessions.find((x) => x.sessionId === sessionId) || {}).color) || null;
+  const initTheme = themedFor(sessColor);
+  pane.style.background = initTheme.background; // tint the padding frame too
   const term = new Terminal({
     fontFamily: termFontFamily,
     fontSize: termFontSize,
@@ -1486,7 +1493,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     letterSpacing: 0,
     cursorBlink: true,
     cursorStyle: 'bar',
-    theme: themedFor(sessColor),
+    theme: initTheme,
     allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();
@@ -1702,7 +1709,11 @@ function refreshEntryLabels() {
       const color = s.color || null;
       if (color !== e.color) {
         e.color = color;
-        if (!e.isLog && e.term) e.term.options.theme = themedFor(color);
+        if (!e.isLog && e.term) {
+          const th = themedFor(color);
+          e.term.options.theme = th;
+          e.pane.style.background = th.background;
+        }
       }
       // Keep the "you asked" banner fed with the latest typed prompt.
       const lu = s.lastUserPrompt || '';
