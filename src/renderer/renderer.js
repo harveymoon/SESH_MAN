@@ -469,6 +469,11 @@ function update(sessions) {
     }
   }
   busyLastTick = nextBusy;
+  // Seed the queue.md mirrors once queues AND session cwds are both known.
+  if (queuesLoaded && !mirrorSeeded && sessions.length) {
+    mirrorSeeded = true;
+    mirrorQueues();
+  }
   for (const s of sessions) {
     // Baseline newly-seen sessions to "read" (so first sight doesn't pulse).
     if (viewed[s.sessionId] == null) viewed[s.sessionId] = activityFor(s);
@@ -2160,7 +2165,40 @@ function activeTermEntry() {
 }
 function saveQueues() {
   window.api.saveQueues(queues); // persisted to disk by the main process
+  mirrorQueues(); // and reflected into each project's queue.md
 }
+
+// ---- queue.md mirror: each session's queue <-> <cwd>/queue.md ----
+// Lets you tell an agent "do the tasks in queue.md": it reads the same list
+// the UI shows, and checking items off ([x]) or editing the file flows back
+// into the pane. One file per project folder (sessions sharing a cwd share
+// it; the active session's queue wins when both have one).
+function mirrorQueues() {
+  const byCwd = new Map();
+  const activeSid = activeSessionId();
+  for (const [sid, items] of Object.entries(queues)) {
+    if (!Array.isArray(items)) continue;
+    const s = latestSessions.find((x) => x.sessionId === sid);
+    const cwd = (s && s.cwd) || '';
+    if (!cwd) continue;
+    if (!byCwd.has(cwd) || sid === activeSid) byCwd.set(cwd, items);
+  }
+  for (const [cwd, items] of byCwd) window.api.mirrorQueue(cwd, items);
+}
+
+window.api.onQueueMirrorChanged(({ cwd, items }) => {
+  // Map the edited file back to a session in that folder: the active one if
+  // it lives there, else the most recent (latestSessions is recency-sorted).
+  const inCwd = latestSessions.filter((s) => s.cwd === cwd);
+  if (!inCwd.length) return;
+  const activeSid = activeSessionId();
+  const target = inCwd.find((s) => s.sessionId === activeSid) || inCwd[0];
+  const sid = target.sessionId;
+  if (JSON.stringify(queues[sid] || []) === JSON.stringify(items)) return;
+  queues[sid] = items.slice();
+  window.api.saveQueues(queues); // persist WITHOUT re-mirroring (no echo loop)
+  renderQueue();
+});
 function updateQueueTarget() {
   const e = activeTermEntry();
   if (e) {
@@ -2207,6 +2245,8 @@ function renderQueue() {
 
 // Index of the queue item currently being drag-reordered (null = none).
 let queueDragIndex = null;
+let queuesLoaded = false; // gates the first queue.md mirror pass
+let mirrorSeeded = false;
 
 function buildQueueItem(sid, i, text, canSend, isDraft) {
   const item = document.createElement('div');
@@ -2690,10 +2730,14 @@ if (localStorage.getItem('seshman.insightOpen') === '1') {
   insightPaneEl.classList.remove('collapsed');
   insightToggleEl.classList.add('active');
 }
-// Load persisted queues from disk, then render.
+// Load persisted queues from disk, then render and seed the queue.md mirrors
+// (cwd lookups need the session list, which may land before or after this —
+// mirrorQueues is also retried on the first sessions update below).
 window.api.loadQueues().then((data) => {
   if (data && typeof data === 'object') queues = data;
+  queuesLoaded = true;
   renderQueue();
+  if (latestSessions.length) mirrorQueues();
 });
 updateQueueTarget();
 // Flush synchronously on window close so the latest keystrokes aren't lost.

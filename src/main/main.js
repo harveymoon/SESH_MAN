@@ -8,6 +8,7 @@ const { PtyManager } = require('./ptyManager');
 const apiServer = require('./apiServer');
 const bulletinStore = require('./bulletinStore');
 const insightWatcher = require('./insightWatcher');
+const queueMirror = require('./queueMirror');
 
 // Live read-only transcript views: sessionId -> { watcher, debounce }.
 const transcriptWatchers = new Map();
@@ -447,6 +448,18 @@ ipcMain.handle('insight:open', (_evt, p) => {
 });
 ipcMain.on('insight:close', () => insightWatcher.closeInsight());
 
+// ---- IPC: queue.md mirror (prompt queue <-> project-folder checklist) ----
+ipcMain.on('queue:mirror', (_evt, p) => {
+  if (p && typeof p === 'object' && typeof p.cwd === 'string' && Array.isArray(p.items)) {
+    queueMirror.writeMirror(p.cwd, p.items.map(String));
+  }
+});
+queueMirror.watchAll((cwd, items) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('queue:mirror-changed', { cwd, items });
+  }
+});
+
 // Single instance: a second launch quits immediately and just focuses the
 // existing window (also avoids fighting over the API port 7374).
 if (!app.requestSingleInstanceLock()) {
@@ -466,6 +479,7 @@ app.on('window-all-closed', () => {
   closeAllTranscriptWatchers();
   bulletinStore.close();
   insightWatcher.closeInsight();
+  queueMirror.closeAll();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -475,6 +489,7 @@ app.on('before-quit', () => {
   closeAllTranscriptWatchers();
   bulletinStore.close();
   insightWatcher.closeInsight();
+  queueMirror.closeAll();
   if (api) {
     try {
       api.close();

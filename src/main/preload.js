@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('api', {
   loadQueues: () => ipcRenderer.invoke('queue:load'),
   saveQueues: (data) => ipcRenderer.send('queue:save', data),
   saveQueuesSync: (data) => ipcRenderer.sendSync('queue:save-sync', data),
+  // queue.md mirror in the session's project folder
+  mirrorQueue: (cwd, items) => ipcRenderer.send('queue:mirror', { cwd, items }),
+  onQueueMirrorChanged: (cb) => ipcRenderer.on('queue:mirror-changed', (_evt, p) => cb(p)),
 
   // Persisted UI settings
   loadSettings: () => ipcRenderer.invoke('settings:load'),

@@ -127,6 +127,7 @@ body { display: flex; flex-direction: column; }
 #queue-toggle,
 #board-toggle,
 #usage-toggle,
+#shots-toggle,
 #insight-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
@@ -142,11 +143,13 @@ body { display: flex; flex-direction: column; }
 #queue-toggle:hover,
 #board-toggle:hover,
 #usage-toggle:hover,
+#shots-toggle:hover,
 #insight-toggle:hover { color: var(--text); border-color: var(--accent); }
 #grid-toggle.active,
 #queue-toggle.active,
 #board-toggle.active,
 #usage-toggle.active,
+#shots-toggle.active,
 #insight-toggle.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 /* reserve room for the native min/max/close overlay drawn on the right */
 .winctrl-spacer { flex: 0 0 138px; }
