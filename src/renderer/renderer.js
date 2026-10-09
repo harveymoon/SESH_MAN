@@ -1820,8 +1820,23 @@ function closeTab(key) {
 
   if (activePtyId === key) {
     activePtyId = null;
-    const next = terms.keys().next();
-    if (!next.done) focusTab(next.value);
+    // Jump to the most recently ACTIVE live terminal — never an exited pane or
+    // a stale log view (the old "first tab ever opened" pick could land on a
+    // dead chat, which reads as nonsense with the live filter on). If nothing
+    // live is open, show the empty state; other tabs stay reachable from the
+    // sidebar.
+    let best = null;
+    let bestAct = -1;
+    for (const [k, e] of terms) {
+      if (e.isLog || e.exited) continue;
+      const s = latestSessions.find((x) => x.sessionId === e.sessionId);
+      const act = s ? effectiveActivity(s) : 0;
+      if (act > bestAct) {
+        bestAct = act;
+        best = k;
+      }
+    }
+    if (best != null) focusTab(best);
     else {
       emptyStateEl.style.display = 'flex';
       updatePaneHeader();
