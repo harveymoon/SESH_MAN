@@ -68,7 +68,9 @@ class ProcessTracker {
       execFile(
         'powershell',
         ['-NoProfile', '-NonInteractive', '-Command', PS_LIST],
-        { windowsHide: true, timeout: 8000 },
+        // cwd: never inherit ours — a wedged query must not pin any folder
+        // (nine of these zombies once EBUSY-locked the release build dir).
+        { windowsHide: true, timeout: 8000, cwd: os.homedir() },
         (err, stdout) => {
           if (err || !stdout) return resolve();
           const next = new Map();

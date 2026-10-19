@@ -112,6 +112,16 @@ try {
 app.disableHardwareAcceleration();
 // Windows taskbar grouping / stable identity (esp. important when run unpackaged).
 if (process.platform === 'win32') app.setAppUserModelId('com.harveymoon.seshman');
+// Children inherit our CWD. Launched by double-click, that CWD is the packaged
+// release\ folder itself — and any straggler child (e.g. a wedged WMI query
+// from the process tracker) then holds a directory handle that EBUSY-blocks
+// every rebuild until the zombie dies. Work from userData instead; all our own
+// paths are absolute, so nothing else cares.
+try {
+  process.chdir(app.getPath('userData'));
+} catch (_) {
+  /* first run before userData exists — harmless */
+}
 app.on('child-process-gone', (_e, details) => logLine('CHILD gone: ' + JSON.stringify(details)));
 
 let mainWindow = null;

@@ -23,13 +23,19 @@ echo Removing the old build folder...
 rd /s /q "release\seshMan-win32-x64" 2>nul
 if exist "release\seshMan-win32-x64" (
     echo.
-    echo   *** The old build folder is LOCKED. ***
-    echo   Usual culprits:
-    echo     - a terminal/PowerShell window cd'd into release\seshMan-win32-x64
-    echo       ^(if you launch seshMan from a console, that console is the lock^)
-    echo     - an Explorer window open inside that folder
-    echo     - antivirus mid-scan ^(just wait 30s^)
-    echo   Close those, then press any key to retry...
+    echo   The old build folder is LOCKED - hunting the holders...
+    if exist "tools\handle64.exe" (
+        powershell -NoProfile -Command "& '%CD%\tools\handle64.exe' -accepteula -nobanner '%CD%\release\seshMan-win32-x64' 2>$null | ForEach-Object { if ($_ -match '^(\S+)\s+pid: (\d+)') { [pscustomobject]@{N=$Matches[1];P=[int]$Matches[2]} } } | Sort-Object P -Unique | ForEach-Object { if ($_.N -in @('seshMan.exe','claude.exe')) { Write-Host ('  NOT killing ' + $_.N + ' pid ' + $_.P + ' - close it yourself') } else { Write-Host ('  killing zombie locker: ' + $_.N + ' pid ' + $_.P); Stop-Process -Id $_.P -Force -ErrorAction SilentlyContinue } }"
+        timeout /t 3 /nobreak >nul
+        rd /s /q "release\seshMan-win32-x64" 2>nul
+    ) else (
+        echo   ^(tools\handle64.exe missing - cannot auto-identify holders^)
+    )
+)
+if exist "release\seshMan-win32-x64" (
+    echo.
+    echo   Still locked. Close any terminal/Explorer window inside the folder,
+    echo   wait 30s for antivirus, then press any key to retry...
     pause >nul
     goto cleanold
 )
