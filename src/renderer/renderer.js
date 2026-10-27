@@ -2542,6 +2542,7 @@ const insightPaneEl = document.getElementById('insight-pane');
 const insightSessionEl = document.getElementById('insight-session');
 const inTodosWrapEl = document.getElementById('in-todos-wrap');
 const inTodosEl = document.getElementById('in-todos');
+const inThinkWrapEl = document.getElementById('in-think-wrap');
 const inThinkEl = document.getElementById('in-think');
 const inThinkCountEl = document.getElementById('in-think-count');
 const inToolsWrapEl = document.getElementById('in-tools-wrap');
