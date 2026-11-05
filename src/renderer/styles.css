@@ -958,7 +958,13 @@ body { display: flex; flex-direction: column; }
   display: none;
   z-index: 20;
 }
-#board-view.show { display: grid; grid-template-columns: 230px 1fr; }
+#board-view.show {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  /* pin the single row to the container height; otherwise it auto-grows with
+     note content and #board-thread's overflow-y never engages */
+  grid-template-rows: minmax(0, 1fr);
+}
 
 #board-topics {
   border-right: 1px solid var(--border);
@@ -993,7 +999,7 @@ body { display: flex; flex-direction: column; }
 }
 .board-topic-meta { flex: none; color: var(--faint); font-size: 9px; }
 
-#board-main { display: flex; flex-direction: column; min-width: 0; }
+#board-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #board-thread-head {
   flex: 0 0 auto;
   display: flex;
