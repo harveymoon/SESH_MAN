@@ -508,6 +508,46 @@ function renderList(shown) {
     `${live} running · ${shown.length} total` + (waiting ? ` · ${waiting} waiting` : '');
 
   sessionListEl.innerHTML = '';
+
+  // Freshly spawned panes with NO transcript yet: until the first prompt is
+  // sent, claude writes nothing to ~/.claude, so no session row points back at
+  // the pane — clicking any other session would strand it unreachable. Give
+  // each such pane a synthetic row until its real session row appears.
+  const orphans = [];
+  for (const [key, e] of terms) {
+    if (e.isLog || e.exited) continue;
+    const matched = latestSessions.some(
+      (s) => (e.sessionId && s.sessionId === e.sessionId) || (e.osPid && s.pid === e.osPid)
+    );
+    if (!matched) orphans.push([key, e]);
+  }
+  if (orphans.length) {
+    const divider = document.createElement('div');
+    divider.className = 'list-divider';
+    divider.textContent = 'just started';
+    sessionListEl.appendChild(divider);
+    for (const [key, e] of orphans) {
+      const el = document.createElement('div');
+      el.className = 'session' + (activePtyId === key ? ' selected' : '');
+      el.innerHTML = `
+        <div class="session-top">
+          <span class="dot idle"></span>
+          <span class="session-project"></span>
+          <span class="session-status">new</span>
+        </div>
+        <div class="session-title"></div>
+        <div class="session-meta">
+          <span>no messages yet</span>
+        </div>`;
+      // label/cwd come from the folder picker — assign as text, never markup.
+      el.querySelector('.session-project').textContent = e.label || 'new session';
+      el.querySelector('.session-title').textContent = '▸ ' + (e.cwd || '');
+      el.title = (e.cwd || '') + '\nNew session — listed here until its first prompt is sent';
+      el.addEventListener('click', () => focusTab(key));
+      sessionListEl.appendChild(el);
+    }
+  }
+
   let lastBucket = -1;
   for (const s of shown) {
     const bucket = bucketOf(effectiveActivity(s));
@@ -1683,7 +1723,7 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
     }
   });
 
-  const entry = { term, fit, sessionId, osPid, pane, label: label || 'session', title, exited: false, needsInput: false, color: sessColor };
+  const entry = { term, fit, sessionId, osPid, pane, cwd, label: label || 'session', title, exited: false, needsInput: false, color: sessColor };
   entry.updateOverlays = updateOverlays; // re-checked after writes (see onPtyData)
   terms.set(ptyId, entry);
   if (sessionId) sessionToPty.set(sessionId, ptyId);
