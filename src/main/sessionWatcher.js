@@ -312,7 +312,40 @@ function getTranscriptMeta(file, mtimeMs, size) {
   return meta;
 }
 
-// Read the conversation (user/assistant text turns) for a read-only log view.
+// Content blocks of one message for the chat view: ordered text and image
+// parts. Pasted images live in user records as base64 image blocks; tool
+// screenshots (Read on a PNG, browser captures) ride tool_result blocks the
+// same way. Tool-result TEXT stays excluded — the view is the conversation,
+// not raw tool dumps.
+function messageParts(msg) {
+  const parts = [];
+  const pushText = (t) => {
+    if (t && t.trim()) parts.push({ t: 'text', text: t.trim() });
+  };
+  const pushImg = (src) => {
+    if (!src || src.type !== 'base64' || typeof src.data !== 'string') return;
+    if (!/^image\//.test(src.media_type || '')) return;
+    if (src.data.length > 12 * 1024 * 1024) return; // don't ship >~9MB images over IPC
+    parts.push({ t: 'img', data: 'data:' + src.media_type + ';base64,' + src.data });
+  };
+  if (!msg) return parts;
+  const c = msg.content;
+  if (typeof c === 'string') pushText(c);
+  else if (Array.isArray(c)) {
+    for (const b of c) {
+      if (!b) continue;
+      if (b.type === 'text') pushText(b.text);
+      else if (b.type === 'image') pushImg(b.source);
+      else if (b.type === 'tool_result' && Array.isArray(b.content)) {
+        for (const ib of b.content) if (ib && ib.type === 'image') pushImg(ib.source);
+      }
+    }
+  }
+  return parts;
+}
+
+// Read the conversation (user/assistant turns as {role, parts, ts}) for the
+// chat/log view. Meta and compact-summary records aren't conversation.
 function readTranscriptMessages(file, limit = 400) {
   let raw;
   try {
@@ -330,9 +363,10 @@ function readTranscriptMessages(file, limit = 400) {
       continue;
     }
     if (r.type !== 'user' && r.type !== 'assistant') continue;
-    const text = messageText(r.message);
-    if (!text || !text.trim()) continue;
-    out.push({ role: r.type, text: text.trim(), ts: r.timestamp ? Date.parse(r.timestamp) : 0 });
+    if (r.isCompactSummary || r.isMeta) continue;
+    const parts = messageParts(r.message);
+    if (!parts.length) continue;
+    out.push({ role: r.type, parts, ts: r.timestamp ? Date.parse(r.timestamp) : 0 });
   }
   return out.slice(-limit);
 }

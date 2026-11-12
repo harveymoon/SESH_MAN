@@ -453,7 +453,8 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#pane-close {
+#pane-close,
+#pane-chat {
   flex: 0 0 auto;
   background: transparent;
   color: var(--muted);
@@ -464,10 +465,11 @@ body { display: flex; flex-direction: column; }
   text-transform: uppercase;
   line-height: 1;
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 5px 10px;
 }
-#pane-close { cursor: pointer; padding: 5px 10px; }
 #pane-close:hover { color: var(--danger); border-color: var(--danger); }
+#pane-chat { margin-right: 6px; }
+#pane-chat:hover { color: var(--accent); border-color: var(--accent); }
 #pane-header.empty { display: none; }
 
 #terminals { flex: 1; position: relative; background: var(--bg); }
@@ -542,6 +544,30 @@ body { display: flex; flex-direction: column; }
 .log-msg.user .log-role { color: var(--accent); }
 .log-msg.user .log-text { color: var(--text); }
 .log-empty { color: var(--faint); text-align: center; padding: 36px; font-size: 11px; }
+/* Inline images in the chat view: pasted images / tool screenshots (data:
+   URIs from the transcript) and dragged-in image file paths. Click to zoom. */
+.log-img {
+  display: block;
+  max-width: min(480px, 85%);
+  max-height: 340px;
+  margin-top: 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  cursor: zoom-in;
+}
+.log-img.zoom { max-width: 100%; max-height: none; cursor: zoom-out; }
+/* Hosted pane chat mode: an opaque transcript overlay above the live terminal.
+   The pty keeps streaming beneath it, so toggling back needs no refit.
+   background:inherit keeps a /color session's tint. z above jump-latest (5)
+   and the you-asked echo (4). */
+.chat-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: none;
+  background: inherit; /* the pane's (possibly /color-tinted) background */
+}
+.term-pane.chat-mode .chat-overlay { display: block; }
 /* floating "back to the live prompt" affordance when scrolled up */
 .jump-latest {
   position: absolute;

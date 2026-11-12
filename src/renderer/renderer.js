@@ -19,6 +19,7 @@ const paneTitleEl = document.getElementById('pane-title');
 const paneSubEl = document.getElementById('pane-sub');
 const paneModelEl = document.getElementById('pane-model');
 const paneCloseEl = document.getElementById('pane-close');
+const paneChatEl = document.getElementById('pane-chat');
 const boardToggleEl = document.getElementById('board-toggle');
 const boardViewEl = document.getElementById('board-view');
 const boardTopicsEl = document.getElementById('board-topics');
@@ -1497,13 +1498,32 @@ async function openLogView(session, live) {
     sessionId: session.sessionId,
     cwd: session.cwd,
   });
-  renderLog(entry, messages);
+  renderChat(entry, messages);
 }
 
-function renderLog(entry, messages) {
-  entry.log.innerHTML = '';
+// Chat rendering — shared by the read-only log view and a hosted pane's chat
+// mode. Message text renders via textContent only (hard rule); images render
+// as <img> from data: URIs carried in the transcript itself (pasted images,
+// tool-result screenshots), plus file-path thumbnails for dragged-in images.
+const IMG_PATH_RE = /[a-z]:[\\/][^\s"'`]+?\.(?:png|jpe?g|gif|webp|bmp)/gi;
+function chatImage(src) {
+  const img = document.createElement('img');
+  img.className = 'log-img';
+  img.src = src;
+  img.title = 'Click to zoom';
+  img.addEventListener('click', () => img.classList.toggle('zoom'));
+  img.addEventListener('error', () => img.remove()); // dead file path → no broken frame
+  return img;
+}
+function renderChat(entry, messages) {
+  const log = entry.log;
+  if (!log) return;
+  // Follow the tail only while the reader is at (or near) the bottom — the
+  // same contract the terminal viewport keeps.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40 || !log.childElementCount;
+  log.innerHTML = '';
   if (!messages || !messages.length) {
-    entry.log.innerHTML = '<div class="log-empty">No readable messages yet.</div>';
+    log.innerHTML = '<div class="log-empty">No readable messages yet.</div>';
     return;
   }
   for (const m of messages) {
@@ -1512,14 +1532,29 @@ function renderLog(entry, messages) {
     const role = document.createElement('div');
     role.className = 'log-role';
     role.textContent = m.role === 'assistant' ? 'claude' : 'you';
-    const body = document.createElement('div');
-    body.className = 'log-text';
-    body.textContent = m.text;
     row.appendChild(role);
-    row.appendChild(body);
-    entry.log.appendChild(row);
+    for (const p of m.parts || []) {
+      if (p.t === 'img') {
+        row.appendChild(chatImage(p.data));
+      } else if (p.t === 'text') {
+        const body = document.createElement('div');
+        body.className = 'log-text';
+        body.textContent = p.text;
+        row.appendChild(body);
+        // Dragged-in image files arrive as bare paths in the prompt text —
+        // thumbnail those too (cap 4; chatImage removes any that fail to load).
+        const seen = new Set();
+        for (const match of p.text.matchAll(IMG_PATH_RE)) {
+          const fp = match[0];
+          if (seen.has(fp) || seen.size >= 4) continue;
+          seen.add(fp);
+          row.appendChild(chatImage(fileUrl(fp)));
+        }
+      }
+    }
+    log.appendChild(row);
   }
-  entry.log.scrollTop = entry.log.scrollHeight;
+  if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
 async function spawnTerminal({ sessionId, cwd, label, title }) {
@@ -1791,6 +1826,45 @@ function paintPaneHeader() {
   paneModelEl.textContent = model;
   paneModelEl.title = entry.model || ''; // raw id on hover
   paneModelEl.classList.toggle('hidden', !model);
+  // Chat/console toggle: hosted panes only, and only once the session has a
+  // transcript to read (a brand-new session binds its id on the first prompt).
+  paneChatEl.classList.toggle('hidden', !!entry.isLog || !entry.sessionId);
+  paneChatEl.textContent = entry.chatMode ? '⌨ console' : '☰ chat';
+  paneChatEl.title = entry.chatMode
+    ? 'Back to the live terminal'
+    : 'View this session as a chat transcript (renders images)';
+}
+
+// Toggle a hosted pane between the live terminal and an opaque chat-transcript
+// overlay. The pty keeps streaming beneath the overlay, so switching back
+// needs no refit; the overlay live-updates via the transcript watcher.
+async function setChatMode(key, on) {
+  const entry = terms.get(key);
+  if (!entry || entry.isLog || !entry.sessionId) return;
+  entry.chatMode = on;
+  entry.pane.classList.toggle('chat-mode', on);
+  paintPaneHeader();
+  if (on) {
+    if (!entry.log) {
+      entry.log = document.createElement('div');
+      entry.log.className = 'log-scroll chat-overlay';
+      entry.log.innerHTML = '<div class="log-empty">Loading transcript…</div>';
+      entry.pane.appendChild(entry.log);
+    }
+    const s = latestSessions.find((x) => x.sessionId === entry.sessionId);
+    entry.chatOpened = true; // a transcript watcher now tails this session
+    const { messages } = await window.api.openTranscript({
+      sessionId: entry.sessionId,
+      cwd: (s && s.cwd) || entry.cwd || '',
+    });
+    if (entry.chatMode) renderChat(entry, messages); // still in chat mode after the await
+  } else {
+    if (entry.chatOpened) {
+      window.api.closeTranscript(entry.sessionId);
+      entry.chatOpened = false;
+    }
+    if (entry.term) entry.term.focus();
+  }
 }
 
 // Full header update incl. queue (only on focus/close — rebuilds queue items).
@@ -1849,6 +1923,8 @@ function closeTab(key) {
   } else {
     window.api.killPty(key);
     entry.term.dispose();
+    // A chat overlay opened a transcript watcher for this session — release it.
+    if (entry.chatOpened && entry.sessionId) window.api.closeTranscript(entry.sessionId);
   }
   entry.pane.remove();
   terms.delete(key);
@@ -1970,9 +2046,11 @@ window.api.onPtyExit(({ id }) => {
 });
 
 // Live updates for an open read-only log view.
+// Live transcript updates feed both consumers: read-only log views and hosted
+// panes currently showing their chat overlay.
 window.api.onTranscriptData(({ sessionId, messages }) => {
   for (const e of terms.values()) {
-    if (e.isLog && e.sessionId === sessionId) renderLog(e, messages);
+    if (e.sessionId === sessionId && (e.isLog || e.chatMode)) renderChat(e, messages);
   }
 });
 
@@ -2932,6 +3010,13 @@ bookmarkModalEl.addEventListener('click', (e) => {
 // Close the active session via the pane header.
 paneCloseEl.addEventListener('click', () => {
   if (activePtyId != null) closeTab(activePtyId);
+});
+
+// Flip the active hosted pane between live console and chat-transcript view.
+paneChatEl.addEventListener('click', () => {
+  if (activePtyId == null) return;
+  const entry = terms.get(activePtyId);
+  if (entry) setChatMode(activePtyId, !entry.chatMode);
 });
 
 // New-session button: pick a folder, then start claude fresh there.
