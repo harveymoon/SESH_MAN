@@ -312,11 +312,21 @@ function getTranscriptMeta(file, mtimeMs, size) {
   return meta;
 }
 
-// Content blocks of one message for the chat view: ordered text and image
-// parts. Pasted images live in user records as base64 image blocks; tool
-// screenshots (Read on a PNG, browser captures) ride tool_result blocks the
-// same way. Tool-result TEXT stays excluded — the view is the conversation,
-// not raw tool dumps.
+// One-line summary of a tool call's input for the chat view's work section.
+function toolSummary(input) {
+  if (!input || typeof input !== 'object') return '';
+  const v =
+    input.description || input.command || input.file_path || input.path ||
+    input.pattern || input.url || input.query || input.prompt || '';
+  return String(v).replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+// Content blocks of one record for the chat view, in order:
+//   text  — prose (user prompt or assistant reply)
+//   think — assistant thinking (skipped when redacted/empty)
+//   tool  — assistant tool call {name, summary}
+//   img   — base64 image as a data: URI (pasted images; tool screenshots)
+// Tool-result TEXT stays out — the view is the conversation, not raw dumps.
 function messageParts(msg) {
   const parts = [];
   const pushText = (t) => {
@@ -336,7 +346,11 @@ function messageParts(msg) {
       if (!b) continue;
       if (b.type === 'text') pushText(b.text);
       else if (b.type === 'image') pushImg(b.source);
-      else if (b.type === 'tool_result' && Array.isArray(b.content)) {
+      else if (b.type === 'thinking') {
+        if (b.thinking && b.thinking.trim()) parts.push({ t: 'think', text: b.thinking.trim() });
+      } else if (b.type === 'tool_use') {
+        parts.push({ t: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input) });
+      } else if (b.type === 'tool_result' && Array.isArray(b.content)) {
         for (const ib of b.content) if (ib && ib.type === 'image') pushImg(ib.source);
       }
     }
@@ -344,31 +358,107 @@ function messageParts(msg) {
   return parts;
 }
 
-// Read the conversation (user/assistant turns as {role, parts, ts}) for the
-// chat/log view. Meta and compact-summary records aren't conversation.
-function readTranscriptMessages(file, limit = 400) {
-  let raw;
+function chatRecord(r, i) {
+  if (r.type !== 'user' && r.type !== 'assistant') return null;
+  if (r.isCompactSummary || r.isMeta) return null;
+  const parts = messageParts(r.message);
+  if (!parts.length) return null;
+  // A user record carrying only tool-result output (e.g. a screenshot) is
+  // tool output, not something the human said.
+  const c = r.message && r.message.content;
+  const isToolResult =
+    r.type === 'user' && Array.isArray(c) && c.some((b) => b && b.type === 'tool_result');
+  return {
+    i, // absolute record index in the file: lets consumers dedupe pushed deltas
+    role: isToolResult ? 'tool' : r.type,
+    parts,
+    ts: r.timestamp ? Date.parse(r.timestamp) : 0,
+  };
+}
+
+// Incremental chat reader: per file, only bytes appended since the last call
+// are parsed (partial tails deferred), so a live chat pane never re-reads a
+// multi-MB transcript on each change. Works on Buffers in blocks — transcripts
+// can exceed V8's max string length (~512MB) — and a record's id `i` is the
+// BYTE OFFSET of its line: absolute and stable even if the cache rebuilds.
+// A cold open of a huge file reads only its last CHAT_TAIL_BYTES (the view
+// keeps the newest CHAT_LIMIT records anyway). A shrink restarts from zero.
+const CHAT_LIMIT = 1500;
+const CHAT_TAIL_BYTES = 48 * 1024 * 1024;
+const CHAT_BLOCK = 8 * 1024 * 1024;
+const chatCache = new Map(); // file -> { processed, msgs } (LRU; holds image data, so kept small)
+function dropChatCache(file) {
+  chatCache.delete(file);
+}
+function readTranscriptMessages(file, limit = CHAT_LIMIT) {
+  let size;
   try {
-    raw = fs.readFileSync(file, 'utf8');
+    size = fs.statSync(file).size;
   } catch (_) {
     return [];
   }
-  const out = [];
-  for (const line of raw.split('\n')) {
-    if (!line) continue;
-    let r;
-    try {
-      r = JSON.parse(line);
-    } catch (_) {
-      continue;
-    }
-    if (r.type !== 'user' && r.type !== 'assistant') continue;
-    if (r.isCompactSummary || r.isMeta) continue;
-    const parts = messageParts(r.message);
-    if (!parts.length) continue;
-    out.push({ role: r.type, parts, ts: r.timestamp ? Date.parse(r.timestamp) : 0 });
+  let c = chatCache.get(file);
+  if (!c || size < c.processed) c = { processed: 0, msgs: [], cold: true };
+  chatCache.delete(file); // re-insert = most recently used
+  chatCache.set(file, c);
+  while (chatCache.size > 4) chatCache.delete(chatCache.keys().next().value);
+  if (size <= c.processed) return c.msgs.slice(-limit);
+
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (_) {
+    return c.msgs.slice(-limit);
   }
-  return out.slice(-limit);
+  try {
+    let pos = c.processed;
+    let skipPartial = false;
+    if (c.cold && size > CHAT_TAIL_BYTES) {
+      pos = size - CHAT_TAIL_BYTES; // tail only; drop the first (partial) line
+      skipPartial = true;
+    }
+    c.cold = false;
+    let block = CHAT_BLOCK;
+    while (pos < size) {
+      const want = Math.min(block, size - pos);
+      const buf = Buffer.alloc(want);
+      const got = fs.readSync(fd, buf, 0, want, pos);
+      const lastNl = buf.lastIndexOf(10, got - 1);
+      if (lastNl === -1) {
+        if (pos + got >= size) break; // partial tail line — wait for the rest
+        block *= 2; // one line bigger than the block (a huge image) — widen
+        continue;
+      }
+      let start = 0;
+      if (skipPartial) {
+        start = buf.indexOf(10) + 1;
+        skipPartial = false;
+      }
+      while (start <= lastNl) {
+        const end = buf.indexOf(10, start);
+        if (end > start) {
+          let r = null;
+          try {
+            r = JSON.parse(buf.toString('utf8', start, end));
+          } catch (_) {
+            /* skip malformed line */
+          }
+          const rec = r && chatRecord(r, pos + start);
+          if (rec) c.msgs.push(rec);
+        }
+        start = end + 1;
+      }
+      if (c.msgs.length > CHAT_LIMIT) c.msgs = c.msgs.slice(-CHAT_LIMIT);
+      pos += lastNl + 1;
+      block = CHAT_BLOCK;
+    }
+    c.processed = pos;
+  } catch (_) {
+    /* keep what we have; the next change retries from c.processed */
+  } finally {
+    fs.closeSync(fd);
+  }
+  return c.msgs.slice(-limit);
 }
 
 // Normalize entrypoint into a coarse source: 'desktop' or 'cli'.
@@ -553,4 +643,5 @@ module.exports = {
   SessionWatcher,
   findTranscript,
   readTranscriptMessages,
+  dropChatCache,
 };

@@ -1498,7 +1498,8 @@ async function openLogView(session, live) {
     sessionId: session.sessionId,
     cwd: session.cwd,
   });
-  renderChat(entry, messages);
+  mergeChat(entry, messages);
+  renderChat(entry);
 }
 
 // Chat rendering — shared by the read-only log view and a hosted pane's chat
@@ -1515,45 +1516,326 @@ function chatImage(src) {
   img.addEventListener('error', () => img.remove()); // dead file path → no broken frame
   return img;
 }
-function renderChat(entry, messages) {
-  const log = entry.log;
-  if (!log) return;
-  // Follow the tail only while the reader is at (or near) the bottom — the
-  // same contract the terminal viewport keeps.
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40 || !log.childElementCount;
-  log.innerHTML = '';
-  if (!messages || !messages.length) {
-    log.innerHTML = '<div class="log-empty">No readable messages yet.</div>';
-    return;
+// ---- Safe markdown → DOM ----
+// Builds elements and assigns ONLY textContent (never innerHTML), so model
+// output can't inject markup. Links render as inert spans (URL on hover):
+// an <a> would navigate the app window itself.
+function mdInline(parent, text) {
+  const re = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(\[[^\]\n]+\]\([^)\s]+\))|(\*[^*\s][^*\n]*?\*)|(\b_[^_\n]+_\b)/;
+  let rest = text;
+  while (rest) {
+    const m = re.exec(rest);
+    if (!m) {
+      parent.appendChild(document.createTextNode(rest));
+      break;
+    }
+    if (m.index) parent.appendChild(document.createTextNode(rest.slice(0, m.index)));
+    const tok = m[0];
+    let el;
+    if (m[1]) {
+      el = document.createElement('code');
+      el.textContent = tok.slice(1, -1);
+    } else if (m[2]) {
+      el = document.createElement('strong');
+      mdInline(el, tok.slice(2, -2));
+    } else if (m[3]) {
+      const lm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok);
+      el = document.createElement('span');
+      el.className = 'md-link';
+      el.textContent = lm[1];
+      el.title = lm[2];
+    } else {
+      el = document.createElement('em');
+      mdInline(el, tok.slice(1, -1));
+    }
+    parent.appendChild(el);
+    rest = rest.slice(m.index + tok.length);
   }
-  for (const m of messages) {
+}
+function mdTableRow(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+}
+function renderMarkdown(text) {
+  const root = document.createElement('div');
+  root.className = 'md';
+  const lines = text.split('\n');
+  const isList = (l) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(l);
+  const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l || '');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+    const fence = /^\s*(```|~~~)\s*([\w+-]*)/.exec(line);
+    if (fence) {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) buf.push(lines[i++]);
+      i++; // closing fence (or EOF)
+      code.textContent = buf.join('\n');
+      if (fence[2]) pre.dataset.lang = fence[2];
+      pre.appendChild(code);
+      root.appendChild(pre);
+      continue;
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      const el = document.createElement('h' + Math.min(6, h[1].length + 2)); // h3..h6: compact
+      mdInline(el, h[2]);
+      root.appendChild(el);
+      i++;
+      continue;
+    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      root.appendChild(document.createElement('hr'));
+      i++;
+      continue;
+    }
+    if (line.includes('|') && isTableSep(lines[i + 1])) {
+      const table = document.createElement('table');
+      const thr = document.createElement('tr');
+      for (const c of mdTableRow(line)) {
+        const th = document.createElement('th');
+        mdInline(th, c);
+        thr.appendChild(th);
+      }
+      table.appendChild(thr);
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        const tr = document.createElement('tr');
+        for (const c of mdTableRow(lines[i])) {
+          const td = document.createElement('td');
+          mdInline(td, c);
+          tr.appendChild(td);
+        }
+        table.appendChild(tr);
+        i++;
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'md-table';
+      wrap.appendChild(table);
+      root.appendChild(wrap);
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      const bq = document.createElement('blockquote');
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+      bq.appendChild(renderMarkdown(buf.join('\n')));
+      root.appendChild(bq);
+      continue;
+    }
+    if (isList(line)) {
+      const ordered = /^\s*\d/.test(line);
+      const list = document.createElement(ordered ? 'ol' : 'ul');
+      while (i < lines.length && (isList(lines[i]) || (lines[i].trim() && /^\s{2,}/.test(lines[i])))) {
+        const l = lines[i];
+        if (isList(l)) {
+          const li = document.createElement('li');
+          const indent = /^\s*/.exec(l)[0].length;
+          if (indent >= 2) li.style.marginLeft = Math.min(indent, 12) * 0.6 + 'em';
+          mdInline(li, l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''));
+          list.appendChild(li);
+        } else if (list.lastChild) {
+          list.lastChild.appendChild(document.createTextNode(' ' + l.trim())); // wrapped item text
+        }
+        i++;
+      }
+      root.appendChild(list);
+      continue;
+    }
+    // Paragraph: consecutive plain lines, line breaks kept (as in the terminal).
+    const p = document.createElement('p');
+    let first = true;
+    while (
+      i < lines.length && lines[i].trim() && !isList(lines[i]) && !/^\s*(```|~~~|#{1,6}\s|>)/.test(lines[i]) &&
+      !(lines[i].includes('|') && isTableSep(lines[i + 1]))
+    ) {
+      if (!first) p.appendChild(document.createElement('br'));
+      mdInline(p, lines[i++]);
+      first = false;
+    }
+    // Guaranteed progress: a line no block rule claimed (e.g. an indented
+    // "  ## x") still renders as text instead of stalling this loop forever.
+    if (first) mdInline(p, lines[i++]);
+    root.appendChild(p);
+  }
+  return root;
+}
+
+// Prompt text renders plain (it's what you typed), plus thumbnails for any
+// dragged-in image file paths (cap 4; dead paths self-remove).
+function appendPromptText(row, text) {
+  const body = document.createElement('div');
+  body.className = 'log-text';
+  body.textContent = text;
+  row.appendChild(body);
+  const seen = new Set();
+  for (const match of text.matchAll(IMG_PATH_RE)) {
+    const fp = match[0];
+    if (seen.has(fp) || seen.size >= 4) continue;
+    seen.add(fp);
+    row.appendChild(chatImage(fileUrl(fp)));
+  }
+}
+
+// Group records into turns: each real user prompt starts a turn; everything
+// after it (thinking, tool calls, tool screenshots, interim text, the answer)
+// belongs to that turn until the next prompt.
+function chatTurns(msgs) {
+  const turns = [];
+  let cur = null;
+  for (const m of msgs) {
+    if (m.role === 'user' || !cur) {
+      cur = { key: m.i, prompt: m.role === 'user' ? m : null, items: m.role === 'user' ? [] : [m] };
+      turns.push(cur);
+    } else cur.items.push(m);
+  }
+  return turns;
+}
+
+function buildTurn(entry, turn, isLast) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-turn';
+  if (turn.prompt) {
     const row = document.createElement('div');
-    row.className = 'log-msg ' + m.role;
+    row.className = 'log-msg user';
     const role = document.createElement('div');
     role.className = 'log-role';
-    role.textContent = m.role === 'assistant' ? 'claude' : 'you';
+    role.textContent = 'you';
     row.appendChild(role);
-    for (const p of m.parts || []) {
-      if (p.t === 'img') {
-        row.appendChild(chatImage(p.data));
-      } else if (p.t === 'text') {
-        const body = document.createElement('div');
-        body.className = 'log-text';
-        body.textContent = p.text;
-        row.appendChild(body);
-        // Dragged-in image files arrive as bare paths in the prompt text —
-        // thumbnail those too (cap 4; chatImage removes any that fail to load).
-        const seen = new Set();
-        for (const match of p.text.matchAll(IMG_PATH_RE)) {
-          const fp = match[0];
-          if (seen.has(fp) || seen.size >= 4) continue;
-          seen.add(fp);
-          row.appendChild(chatImage(fileUrl(fp)));
-        }
+    for (const p of turn.prompt.parts) {
+      if (p.t === 'img') row.appendChild(chatImage(p.data));
+      else if (p.t === 'text') appendPromptText(row, p.text);
+    }
+    wrap.appendChild(row);
+  }
+  // Flatten the response; the FINAL answer is the run of assistant text after
+  // the last piece of work (thinking / tool call / tool output). Everything
+  // before it folds into one collapsible work section.
+  const flat = [];
+  for (const m of turn.items) for (const p of m.parts) flat.push({ role: m.role, p });
+  let lastWork = -1;
+  flat.forEach((x, k) => {
+    if (!(x.role === 'assistant' && x.p.t === 'text')) lastWork = k;
+  });
+  const work = flat.slice(0, lastWork + 1);
+  const final = flat.slice(lastWork + 1);
+  const running = isLast && !final.length;
+
+  if (work.length) {
+    const det = document.createElement('details');
+    det.className = 'chat-work' + (running ? ' running' : '');
+    det.open = entry.openWork.has(turn.key);
+    det.addEventListener('toggle', () => {
+      if (det.open) entry.openWork.add(turn.key);
+      else entry.openWork.delete(turn.key);
+    });
+    const sum = document.createElement('summary');
+    const nThink = work.filter((x) => x.p.t === 'think').length;
+    const nTool = work.filter((x) => x.p.t === 'tool').length;
+    const bits = [];
+    if (nThink) bits.push(nThink + ' thought' + (nThink > 1 ? 's' : ''));
+    if (nTool) bits.push(nTool + ' tool call' + (nTool > 1 ? 's' : ''));
+    const nText = work.filter((x) => x.p.t === 'text').length;
+    if (nText) bits.push(nText + ' note' + (nText > 1 ? 's' : ''));
+    let label = (running ? 'working… ' : 'worked · ') + (bits.join(' · ') || work.length + ' steps');
+    if (running) {
+      const lastTool = [...work].reverse().find((x) => x.p.t === 'tool');
+      if (lastTool) label += '  —  ' + lastTool.p.name + (lastTool.p.summary ? ' ' + lastTool.p.summary : '');
+    }
+    sum.textContent = label;
+    det.appendChild(sum);
+    const body = document.createElement('div');
+    body.className = 'chat-work-body';
+    for (const { role, p } of work) {
+      if (p.t === 'think') {
+        const d = document.createElement('div');
+        d.className = 'chat-think';
+        d.textContent = p.text;
+        body.appendChild(d);
+      } else if (p.t === 'tool') {
+        const d = document.createElement('div');
+        d.className = 'chat-tool';
+        const n = document.createElement('span');
+        n.className = 'chat-tool-name';
+        n.textContent = p.name;
+        const s = document.createElement('span');
+        s.className = 'chat-tool-sum';
+        s.textContent = p.summary || '';
+        d.appendChild(n);
+        d.appendChild(s);
+        body.appendChild(d);
+      } else if (p.t === 'img') {
+        body.appendChild(chatImage(p.data));
+      } else if (p.t === 'text' && role === 'assistant') {
+        const d = renderMarkdown(p.text);
+        d.classList.add('chat-interim');
+        body.appendChild(d);
       }
     }
-    log.appendChild(row);
+    det.appendChild(body);
+    wrap.appendChild(det);
   }
+  if (final.length) {
+    const row = document.createElement('div');
+    row.className = 'log-msg assistant';
+    const role = document.createElement('div');
+    role.className = 'log-role';
+    role.textContent = 'claude';
+    row.appendChild(role);
+    for (const { p } of final) row.appendChild(renderMarkdown(p.text));
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+// Merge records into entry.msgs: a full list replaces; a delta (from the
+// watcher) appends only records newer than what we hold.
+function mergeChat(entry, messages, delta) {
+  if (!delta || !entry.msgs) entry.msgs = (messages || []).slice();
+  else {
+    const last = entry.msgs.length ? entry.msgs[entry.msgs.length - 1].i : -1;
+    for (const m of messages) if (m.i > last) entry.msgs.push(m);
+    if (entry.msgs.length > 1500) entry.msgs = entry.msgs.slice(-1500);
+  }
+}
+
+// Render entry.msgs as turns. Turn DOM is memoized by (first record index,
+// last record index), so a live update rebuilds only the turn that changed —
+// images aren't re-decoded and open/closed work sections stay put.
+function renderChat(entry) {
+  const log = entry.log;
+  if (!log) return;
+  if (!entry.openWork) entry.openWork = new Set();
+  if (!entry.turnCache) entry.turnCache = new Map();
+  const msgs = entry.msgs || [];
+  if (!msgs.length) {
+    log.innerHTML = '<div class="log-empty">No readable messages yet.</div>';
+    entry.turnCache.clear();
+    return;
+  }
+  // Follow the tail only while the reader is at (or near) the bottom — the
+  // same contract the terminal viewport keeps.
+  const atBottom =
+    entry.forceBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 60 || !log.querySelector('.chat-turn');
+  entry.forceBottom = false;
+  const turns = chatTurns(msgs);
+  const nextCache = new Map();
+  const els = turns.map((t, k) => {
+    const isLast = k === turns.length - 1;
+    const sig = (t.items.length ? t.items[t.items.length - 1].i : t.key) + (isLast ? ':L' : '');
+    const hit = entry.turnCache.get(t.key);
+    const el = hit && hit.sig === sig ? hit.el : buildTurn(entry, t, isLast);
+    nextCache.set(t.key, { sig, el });
+    return el;
+  });
+  entry.turnCache = nextCache;
+  log.replaceChildren(...els);
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
@@ -1838,6 +2120,81 @@ function paintPaneHeader() {
 // Toggle a hosted pane between the live terminal and an opaque chat-transcript
 // overlay. The pty keeps streaming beneath the overlay, so switching back
 // needs no refit; the overlay live-updates via the transcript watcher.
+// The chat overlay: a scrolling transcript above a composer pinned to the
+// bottom (outside the scroll area, so it stays put while you read back).
+// Enter sends straight into the live session; Shift+Enter is a newline.
+function buildChatOverlay(key, entry) {
+  const overlay = document.createElement('div');
+  overlay.className = 'chat-overlay';
+  const log = document.createElement('div');
+  log.className = 'log-scroll';
+  log.innerHTML = '<div class="log-empty">Loading transcript…</div>';
+  const jump = document.createElement('button');
+  jump.className = 'jump-latest chat-jump hidden';
+  jump.textContent = '▼ latest';
+  jump.addEventListener('click', () => {
+    log.scrollTop = log.scrollHeight;
+  });
+  log.addEventListener('scroll', () => {
+    jump.classList.toggle('hidden', log.scrollHeight - log.scrollTop - log.clientHeight < 60);
+  });
+  const compose = document.createElement('div');
+  compose.className = 'chat-compose';
+  const input = document.createElement('textarea');
+  input.rows = 1;
+  input.placeholder = 'Message this session…  (Enter to send · Shift+Enter for newline)';
+  const send = document.createElement('button');
+  send.className = 'chat-send';
+  send.textContent = 'send ▸';
+  const autosize = () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  };
+  const submit = () => {
+    const text = input.value;
+    if (!text.trim()) return;
+    const e = terms.get(key);
+    if (!e || e.exited) return;
+    sendPromptTo(key, text);
+    input.value = '';
+    autosize();
+    entry.forceBottom = true; // your own message should land in view
+    log.scrollTop = log.scrollHeight;
+  };
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      submit();
+    }
+  });
+  send.addEventListener('click', submit);
+  // The pane's own right-click/drop handlers paste into the (hidden) pty —
+  // in chat mode they belong to the composer instead.
+  overlay.addEventListener('contextmenu', (ev) => ev.stopPropagation());
+  overlay.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    entry.pane.classList.remove('drop-target');
+    const paths = droppedPaths(ev);
+    if (paths) {
+      const at = input.selectionStart ?? input.value.length;
+      input.value = input.value.slice(0, at) + paths + ' ' + input.value.slice(at);
+      autosize();
+      input.focus();
+    }
+  });
+  compose.appendChild(input);
+  compose.appendChild(send);
+  overlay.appendChild(log);
+  overlay.appendChild(jump);
+  overlay.appendChild(compose);
+  entry.pane.appendChild(overlay);
+  entry.chatOverlay = overlay;
+  entry.log = log;
+  entry.chatInput = input;
+}
+
 async function setChatMode(key, on) {
   const entry = terms.get(key);
   if (!entry || entry.isLog || !entry.sessionId) return;
@@ -1845,19 +2202,18 @@ async function setChatMode(key, on) {
   entry.pane.classList.toggle('chat-mode', on);
   paintPaneHeader();
   if (on) {
-    if (!entry.log) {
-      entry.log = document.createElement('div');
-      entry.log.className = 'log-scroll chat-overlay';
-      entry.log.innerHTML = '<div class="log-empty">Loading transcript…</div>';
-      entry.pane.appendChild(entry.log);
-    }
+    if (!entry.chatOverlay) buildChatOverlay(key, entry);
     const s = latestSessions.find((x) => x.sessionId === entry.sessionId);
     entry.chatOpened = true; // a transcript watcher now tails this session
     const { messages } = await window.api.openTranscript({
       sessionId: entry.sessionId,
       cwd: (s && s.cwd) || entry.cwd || '',
     });
-    if (entry.chatMode) renderChat(entry, messages); // still in chat mode after the await
+    if (!entry.chatMode) return; // toggled back off during the await
+    mergeChat(entry, messages);
+    entry.forceBottom = true;
+    renderChat(entry);
+    entry.chatInput.focus();
   } else {
     if (entry.chatOpened) {
       window.api.closeTranscript(entry.sessionId);
@@ -2048,9 +2404,12 @@ window.api.onPtyExit(({ id }) => {
 // Live updates for an open read-only log view.
 // Live transcript updates feed both consumers: read-only log views and hosted
 // panes currently showing their chat overlay.
-window.api.onTranscriptData(({ sessionId, messages }) => {
+window.api.onTranscriptData(({ sessionId, messages, delta }) => {
   for (const e of terms.values()) {
-    if (e.sessionId === sessionId && (e.isLog || e.chatMode)) renderChat(e, messages);
+    if (e.sessionId === sessionId && (e.isLog || e.chatMode)) {
+      mergeChat(e, messages, delta);
+      renderChat(e);
+    }
   }
 });
 

@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, Menu, dialog, clipboard, crashReporter } = require('electron');
-const { SessionWatcher, findTranscript, readTranscriptMessages } = require('./sessionWatcher');
+const { SessionWatcher, findTranscript, readTranscriptMessages, dropChatCache } = require('./sessionWatcher');
 const { PtyManager } = require('./ptyManager');
 const apiServer = require('./apiServer');
 const bulletinStore = require('./bulletinStore');
@@ -29,6 +29,7 @@ function closeTranscriptWatcher(sessionId) {
   } catch (_) {
     /* already closed */
   }
+  if (rec.file) dropChatCache(rec.file); // parsed records can hold MBs of image data
   transcriptWatchers.delete(sessionId);
 }
 
@@ -369,14 +370,18 @@ ipcMain.handle('transcript:open', (_evt, p) => {
   if (!isValidSessionId(sessionId)) return { messages: [] };
   const file = findTranscript(sessionId, cwd);
   if (!file) return { messages: [] };
+  const snapshot = readTranscriptMessages(file);
   if (!transcriptWatchers.has(sessionId)) {
+    // Pushes carry only records newer than the last push (each record has an
+    // absolute index `i`; consumers append i > their last and ignore dupes),
+    // so a live session doesn't re-ship every image on every change.
     const push = () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('transcript:data', {
-          sessionId,
-          messages: readTranscriptMessages(file),
-        });
-      }
+      const rec = transcriptWatchers.get(sessionId);
+      if (!rec || !mainWindow || mainWindow.isDestroyed()) return;
+      const fresh = readTranscriptMessages(file).filter((m) => m.i > rec.lastSent);
+      if (!fresh.length) return;
+      rec.lastSent = fresh[fresh.length - 1].i;
+      mainWindow.webContents.send('transcript:data', { sessionId, messages: fresh, delta: true });
     };
     try {
       const w = fs.watch(file, () => {
@@ -388,12 +393,17 @@ ipcMain.handle('transcript:open', (_evt, p) => {
       // Self-remove if the file is deleted or the handle errors, so dead
       // watchers don't linger and keep firing for the life of the process.
       w.on('error', () => closeTranscriptWatcher(sessionId));
-      transcriptWatchers.set(sessionId, { watcher: w, debounce: null });
+      transcriptWatchers.set(sessionId, {
+        file,
+        watcher: w,
+        debounce: null,
+        lastSent: snapshot.length ? snapshot[snapshot.length - 1].i : -1,
+      });
     } catch (_) {
       /* file vanished */
     }
   }
-  return { messages: readTranscriptMessages(file) };
+  return { messages: snapshot };
 });
 
 // ---- IPC: per-session prompt queues (persisted to disk) ----
