@@ -73,5 +73,6 @@ contextBridge.exposeInMainWorld('api', {
   boardPost: (note) => ipcRenderer.invoke('bulletin:post', note),
   boardDelete: (id) => ipcRenderer.invoke('bulletin:delete', id),
   boardDeleteTopic: (slug) => ipcRenderer.invoke('bulletin:delete-topic', slug),
+  boardArchive: (ids) => ipcRenderer.invoke('bulletin:archive', ids),
   onBoardChanged: (cb) => ipcRenderer.on('bulletin:changed', () => cb()),
 });

@@ -16,6 +16,10 @@ const path = require('path');
 
 const BULLETIN_DIR = path.join(os.homedir(), '.claude', 'bulletin');
 const NOTES_DIR = path.join(BULLETIN_DIR, 'notes');
+// Archived notes (user action on superseded notes) move here — never deleted.
+// listNotes and bulletin.py only read *.json directly in NOTES_DIR, so this
+// subfolder is invisible to both.
+const ARCHIVE_DIR = path.join(NOTES_DIR, '.archive');
 const CURSORS_DIR = path.join(BULLETIN_DIR, '.cursors');
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -106,7 +110,16 @@ function listNotes() {
   for (const f of files) {
     try {
       const n = JSON.parse(fs.readFileSync(path.join(NOTES_DIR, f), 'utf8'));
-      if (n && n.id && n.topic && typeof n.text === 'string') notes.push(n);
+      if (n && n.id && n.topic && typeof n.text === 'string') {
+        // Digest field (optional): keep only well-formed note ids.
+        if (n.supersedes !== undefined) {
+          n.supersedes = Array.isArray(n.supersedes)
+            ? n.supersedes.filter((x) => typeof x === 'string' && ID_RE.test(x)).slice(0, 500)
+            : [];
+          if (!n.supersedes.length) delete n.supersedes;
+        }
+        notes.push(n);
+      }
     } catch (_) {
       /* mid-write / deleted between readdir and read; next tick heals */
     }
@@ -203,4 +216,29 @@ function deleteTopic(slug) {
   return { ok: true, removed };
 }
 
-module.exports = { listNotes, listCursors, postNote, deleteNote, deleteTopic, watch, close };
+// Archive (user-only): move notes into notes/.archive/ — out of every view,
+// recoverable by moving the file back. Ids are validated; never a filename
+// from the renderer.
+function archiveNotes(ids) {
+  if (!Array.isArray(ids)) return { error: 'bad_ids' };
+  let moved = 0;
+  try {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+  } catch (_) {
+    return { error: 'archive_failed' };
+  }
+  for (const id of ids.slice(0, 500)) {
+    if (!ID_RE.test(String(id || ''))) continue;
+    const src = path.join(NOTES_DIR, id + '.json');
+    const dst = path.join(ARCHIVE_DIR, id + '.json');
+    try {
+      fs.renameSync(src, dst);
+      moved++;
+    } catch (_) {
+      /* already gone / archived */
+    }
+  }
+  return { ok: true, moved };
+}
+
+module.exports = { listNotes, listCursors, postNote, deleteNote, deleteTopic, archiveNotes, watch, close };

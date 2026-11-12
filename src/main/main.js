@@ -255,6 +255,7 @@ ipcMain.handle('bulletin:list', () => ({
 ipcMain.handle('bulletin:post', (_evt, input) => bulletinStore.postNote(input));
 ipcMain.handle('bulletin:delete', (_evt, id) => bulletinStore.deleteNote(id));
 ipcMain.handle('bulletin:delete-topic', (_evt, slug) => bulletinStore.deleteTopic(slug));
+ipcMain.handle('bulletin:archive', (_evt, ids) => bulletinStore.archiveNotes(ids));
 // (The change-signal watcher is registered in createWindow — bulletinStore
 // .close() runs on window-all-closed, so a macOS re-activate must re-watch.)
 // Renderer pushes the computed deck view; the local API serves it verbatim.

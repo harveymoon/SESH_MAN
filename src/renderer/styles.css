@@ -1242,6 +1242,56 @@ body { display: flex; flex-direction: column; }
 }
 .board-empty { color: var(--faint); font-size: 11px; padding: 18px 10px; text-align: center; }
 
+/* digest: the topic's curated knowledge entry, pinned on top */
+.board-note.digest {
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+.board-digest-tag {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 0 5px;
+}
+.board-note-md { margin-top: 6px; }
+
+/* notes replaced by a digest, folded */
+.board-superseded {
+  margin: 0 0 12px;
+  border: 1px dashed var(--border-2);
+  padding: 2px 8px;
+}
+.board-superseded > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 10px;
+  color: var(--faint);
+  user-select: none;
+}
+.board-superseded > summary::-webkit-details-marker { display: none; }
+.board-superseded > summary > span::before { content: '▸ '; }
+.board-superseded[open] > summary > span::before { content: '▾ '; }
+.board-superseded > .board-note { opacity: 0.55; }
+.board-archive-btn {
+  flex: none;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-2);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.board-archive-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.board-archive-btn:disabled { opacity: 0.45; cursor: default; }
+
 #board-composer {
   flex: 0 0 auto;
   border-top: 1px solid var(--border);
