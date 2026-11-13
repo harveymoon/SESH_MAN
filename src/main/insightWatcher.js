@@ -9,7 +9,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { findTranscript } = require('./sessionWatcher');
+const { findTranscript, readCompleteLines } = require('./sessionWatcher');
 
 const KEEP_TOOLS = 40;
 const KEEP_THINK = 6;
@@ -110,11 +110,6 @@ function trackPending(id, row) {
   if (pending.size > 300) pending.delete(pending.keys().next().value);
 }
 
-function completePrefixBytes(text) {
-  const lastNl = text.lastIndexOf('\n');
-  return lastNl === -1 ? 0 : Buffer.byteLength(text.slice(0, lastNl + 1), 'utf8');
-}
-
 function foldChunk(text) {
   const lastNl = text.lastIndexOf('\n');
   if (lastNl === -1) return 0;
@@ -141,16 +136,8 @@ function onFileChange() {
         return;
       }
       if (st.size === current.offset) return;
-      const fd = fs.openSync(current.file, 'r');
-      let chunk = '';
-      try {
-        const buf = Buffer.alloc(st.size - current.offset);
-        const got = fs.readSync(fd, buf, 0, buf.length, current.offset);
-        chunk = buf.toString('utf8', 0, got);
-      } finally {
-        fs.closeSync(fd);
-      }
-      current.offset += foldChunk(chunk);
+      // Block-wise (never one giant string — see readCompleteLines).
+      current.offset = readCompleteLines(current.file, current.offset, foldChunk);
       current.push(snapshot());
     } catch (_) {
       /* transient read error; next change retries */
@@ -210,11 +197,7 @@ function openInsight(sessionId, cwd, push) {
     pending: new Map(),
     push,
   };
-  let raw = '';
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (_) {}
-  current.offset = foldChunk(raw);
+  current.offset = readCompleteLines(file, 0, foldChunk);
   try {
     current.watcher = fs.watch(file, onFileChange);
     current.watcher.on('error', () => closeInsight());

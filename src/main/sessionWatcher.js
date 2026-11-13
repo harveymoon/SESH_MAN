@@ -260,21 +260,59 @@ function applyTranscriptLines(meta, text) {
 // Only complete lines (up to the last \n) are folded in; the byte offset of
 // that newline is returned so the next pass resumes there. A partial tail
 // (file mid-write) is left for the next pass instead of being half-parsed.
-function completePrefixBytes(text) {
-  const lastNl = text.lastIndexOf('\n');
-  return lastNl === -1 ? 0 : Buffer.byteLength(text.slice(0, lastNl + 1), 'utf8');
+// Feed a file's complete lines from byte `start` to onChunk(text) in bounded
+// blocks; returns the byte offset just past the last complete line (a partial
+// tail is left for the next pass). NEVER decode a whole transcript into one
+// string: transcripts reach hundreds of MB, and past V8's max string length
+// (~512MB) Electron's Node doesn't throw — it hard-crashes the main process
+// (FATAL "ToLocalChecked Empty MaybeLocal"). That killed seshMan at startup
+// once a 764MB transcript had to be parsed cold.
+const LINE_BLOCK = 16 * 1024 * 1024;
+const LINE_BLOCK_MAX = 256 * 1024 * 1024;
+function readCompleteLines(file, start, onChunk) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (_) {
+    return start;
+  }
+  let pos = start;
+  try {
+    const size = fs.fstatSync(fd).size;
+    let block = LINE_BLOCK;
+    while (pos < size) {
+      const want = Math.min(block, size - pos);
+      const buf = Buffer.allocUnsafe(want);
+      const got = fs.readSync(fd, buf, 0, want, pos);
+      if (got <= 0) break;
+      const nl = buf.lastIndexOf(0x0a, got - 1);
+      if (nl === -1) {
+        if (pos + got >= size) break; // partial tail: wait for the writer
+        if (block < LINE_BLOCK_MAX) {
+          block *= 2; // one very long line (e.g. a big image): read wider
+          continue;
+        }
+        pos += got; // absurd single line: skip it rather than decode it
+        block = LINE_BLOCK;
+        continue;
+      }
+      onChunk(buf.toString('utf8', 0, nl + 1));
+      pos += nl + 1;
+      block = LINE_BLOCK;
+    }
+  } catch (_) {
+    /* transient read error; the caller resumes from pos next pass */
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch (_) {}
+  }
+  return pos;
 }
 
 function parseTranscript(file) {
   const meta = newTranscriptMeta();
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (_) {
-    return { meta, processed: 0 };
-  }
-  const processed = completePrefixBytes(raw);
-  applyTranscriptLines(meta, raw); // partial tail lines fail JSON.parse harmlessly
+  const processed = readCompleteLines(file, 0, (text) => applyTranscriptLines(meta, text));
   return { meta, processed };
 }
 
@@ -287,21 +325,10 @@ function getTranscriptMeta(file, mtimeMs, size) {
   if (cached && cached.mtimeMs === mtimeMs) return cached.meta;
   if (cached && cached.processed > 0 && size >= cached.processed) {
     try {
-      const want = size - cached.processed;
-      let chunk = '';
-      if (want > 0) {
-        const fd = fs.openSync(file, 'r');
-        try {
-          const buf = Buffer.alloc(want);
-          const got = fs.readSync(fd, buf, 0, want, cached.processed);
-          chunk = buf.toString('utf8', 0, got);
-        } finally {
-          fs.closeSync(fd);
-        }
-      }
-      const done = completePrefixBytes(chunk);
-      if (done > 0) applyTranscriptLines(cached.meta, chunk.slice(0, chunk.lastIndexOf('\n') + 1));
-      transcriptCache.set(file, { mtimeMs, processed: cached.processed + done, meta: cached.meta });
+      const processed = readCompleteLines(file, cached.processed, (text) =>
+        applyTranscriptLines(cached.meta, text),
+      );
+      transcriptCache.set(file, { mtimeMs, processed, meta: cached.meta });
       return cached.meta;
     } catch (_) {
       /* fall through to a full re-parse */
@@ -643,5 +670,6 @@ module.exports = {
   SessionWatcher,
   findTranscript,
   readTranscriptMessages,
+  readCompleteLines,
   dropChatCache,
 };
