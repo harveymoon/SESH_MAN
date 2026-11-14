@@ -9,7 +9,7 @@
     "postinstall": "node scripts/fetch-pty-prebuild.js",
     "rebuild": "node scripts/fetch-pty-prebuild.js",
     "icon": "node scripts/make-icon.js",
-    "pack": "node scripts/make-icon.js && electron-packager . seshMan --platform=win32 --arch=x64 --icon=assets/icon.ico --asar.unpack=**/*.node --overwrite --out=release --ignore=\"^/(release|seshman\\.log)\" --app-copyright=\"Copyright (c) 2026 Harvey Moon\" --win32metadata.CompanyName=\"seshMan\" --win32metadata.FileDescription=\"seshMan\" --win32metadata.ProductName=\"seshMan\" --win32metadata.InternalName=\"seshMan\" --win32metadata.OriginalFilename=\"seshMan.exe\""
+    "pack": "node scripts/make-icon.js && electron-packager . seshMan --platform=win32 --arch=x64 --icon=assets/icon.ico --asar.unpack=**/*.node --overwrite --out=release --ignore=\"^/(?!(src|assets|node_modules|package\\.json)(/|$))\" --ignore=\"\\.pdb$\" --ignore=\"node-pty-prebuilt-multiarch/(prebuilds|third_party|deps|src|scripts)(/|$)\" --app-copyright=\"Copyright (c) 2026 Harvey Moon\" --win32metadata.CompanyName=\"seshMan\" --win32metadata.FileDescription=\"seshMan\" --win32metadata.ProductName=\"seshMan\" --win32metadata.InternalName=\"seshMan\" --win32metadata.OriginalFilename=\"seshMan.exe\""
   },
   "author": "Harvey Moon",
   "license": "MIT",
