@@ -74,6 +74,10 @@ let boardCursors = {}; // { nameSlug: { topic: lastReadNoteId } }
 let boardTopic = null; // selected topic slug
 let boardReplyTo = null; // note id the composer is replying to
 const boardSupersededOpen = new Set(); // topics whose superseded group is expanded
+let boardNotesVersion = 0; // bumped per boardList() reply
+let boardRenderedKey = null; // `${version}|${topic}` of the last full board render
+let boardRenderedTopic = null; // topic of the last thread render (scroll keeping)
+let boardTargetsSig = null; // hosted-session set behind the nudge/"to:" selects
 let boardLastSeen = Number(localStorage.getItem('seshman.boardLastSeen') || 0);
 
 function activeSessionId() {
@@ -277,10 +281,11 @@ function setTheme(mode) {
 }
 
 // ---------- Sidebar rendering ----------
+// s.status comes straight from ~/.claude/sessions/<pid>.json — external data.
+// It becomes a CSS class, so whitelist it (never pass it through raw).
+const STATUS_CLASSES = new Set(['busy', 'idle', 'shell', 'stopped']);
 function statusClass(s) {
-  if (!s.alive) return 'dead';
-  if (s.status === 'busy') return 'busy';
-  return s.status || 'idle';
+  return STATUS_CLASSES.has(s.status) ? s.status : 'idle';
 }
 
 // The session's display name: user's /rename title first, then auto-title,
@@ -450,7 +455,7 @@ function render() {
   const shown = applyFilters(latestSessions);
   renderList(shown);
   if (gridMode) renderGrid(shown);
-  if (boardMode) renderBoard();
+  if (boardMode) renderBoardIfChanged();
   refreshBoardToggleDot();
   refreshEntryLabels(); // keep open tabs' titles current
   paintPaneHeader(); // reflect any title change in the active pane header
@@ -582,7 +587,7 @@ function renderList(shown) {
 
     el.innerHTML = `
       <div class="session-top">
-        <span class="dot ${ds.stateClass}"></span>
+        <span class="dot"></span>
         <span class="session-project"></span>
         <span class="session-status"></span>
       </div>
@@ -593,6 +598,7 @@ function renderList(shown) {
       </div>`;
     // These derive from external files (session/transcript) — assign as text,
     // never interpolate into innerHTML, so a crafted status/version can't inject.
+    el.querySelector('.dot').className = 'dot ' + ds.stateClass;
     el.querySelector('.session-status').textContent = ds.statusText;
     const metaSpans = el.querySelectorAll('.session-meta > span');
     metaSpans[0].textContent = relTime(effectiveActivity(s)); // last real message
@@ -787,6 +793,7 @@ async function refreshBoard() {
     const res = await window.api.boardList();
     boardNotes = (res && res.notes) || [];
     boardCursors = (res && res.cursors) || {};
+    boardNotesVersion++;
   } catch (_) {
     return; // main not ready; next change signal retries
   }
@@ -994,42 +1001,17 @@ function renderBoard() {
     boardTopicsEl.appendChild(row);
   }
 
-  // Thread header + nudge target list (hosted sessions only — injection needs
-  // a live PTY we own).
   boardThreadTitleEl.textContent = boardTopic || '(no topic)';
-  const hosted = hostedSessionList();
-  boardNudgeSelectEl.innerHTML = '';
-  for (const s of hosted) {
-    const opt = document.createElement('option');
-    opt.value = s.sessionId;
-    opt.textContent = displayTitle(s);
-    boardNudgeSelectEl.appendChild(opt);
-  }
-  const canNudge = !!boardTopic && hosted.length > 0;
-  boardNudgeEl.disabled = !canNudge;
-  boardNudgeSelectEl.disabled = hosted.length === 0;
   boardTopicDeleteEl.disabled = !boardTopic;
-
-  // Composer helpers: datalist of known topics + "to" targets.
+  // Composer helper: datalist of known topics.
   boardTopicListEl.innerHTML = '';
   for (const t of rows) {
     const opt = document.createElement('option');
     opt.value = t.topic;
     boardTopicListEl.appendChild(opt);
   }
-  const prevTo = boardToEl.value;
-  boardToEl.innerHTML = '<option value="">to: anyone</option>';
-  for (const s of hosted) {
-    const opt = document.createElement('option');
-    opt.value = s.name || displayTitle(s);
-    opt.textContent = 'to: ' + displayTitle(s);
-    boardToEl.appendChild(opt);
-  }
-  boardToEl.value = prevTo;
-  if (boardToEl.selectedIndex < 0) boardToEl.value = ''; // prior target gone -> "to: anyone"
   if (!boardTopicInputEl.value && boardTopic) boardTopicInputEl.value = boardTopic;
-
-  boardTidyEl.disabled = !canNudge;
+  renderBoardTargets();
 
   // Thread layout:
   //   1. the newest live digest, pinned on top (the topic's knowledge entry)
@@ -1038,6 +1020,13 @@ function renderBoard() {
   //   3. live notes chronologically — replies indented under their parent;
   //      a reply whose parent is deleted or superseded PROMOTES to top level
   //      with a hint (a hidden parent must never hide its subtree).
+  // Same topic re-rendered (new notes arrived): keep the reader's place —
+  // follow the tail only if they were already at the bottom.
+  const sameTopic = boardRenderedTopic === boardTopic;
+  const prevTop = boardThreadEl.scrollTop;
+  const wasAtBottom =
+    boardThreadEl.scrollHeight - boardThreadEl.scrollTop - boardThreadEl.clientHeight < 40;
+  boardRenderedTopic = boardTopic;
   boardThreadEl.innerHTML = '';
   const inTopic = boardNotes.filter((n) => n.topic === boardTopic);
   const hidden = new Set();
@@ -1107,10 +1096,58 @@ function renderBoard() {
     empty.textContent = 'No notes in this topic.';
     boardThreadEl.appendChild(empty);
   }
-  // A digest is the summary — open at the top; otherwise at the newest note.
-  boardThreadEl.scrollTop = pinned ? 0 : boardThreadEl.scrollHeight;
+  if (sameTopic) {
+    boardThreadEl.scrollTop = wasAtBottom && !pinned ? boardThreadEl.scrollHeight : prevTop;
+  } else {
+    // A digest is the summary — open at the top; otherwise at the newest note.
+    boardThreadEl.scrollTop = pinned ? 0 : boardThreadEl.scrollHeight;
+  }
 
+  boardRenderedKey = boardNotesVersion + '|' + boardTopic;
   if (boardMode) saveBoardLastSeen(); // everything on screen counts as seen
+}
+
+// Nudge/tidy target + "to:" selects (hosted sessions only — injection needs a
+// live PTY we own). Rebuilt only when the hosted set or titles change, and the
+// user's current choice is kept: resetting it every tick sent nudges to the
+// wrong session.
+function renderBoardTargets() {
+  const hosted = hostedSessionList();
+  const canNudge = !!boardTopic && hosted.length > 0;
+  boardNudgeEl.disabled = !canNudge;
+  boardTidyEl.disabled = !canNudge;
+  boardNudgeSelectEl.disabled = hosted.length === 0;
+  const sig = hosted.map((s) => s.sessionId + '\u0001' + displayTitle(s) + '\u0001' + (s.name || '')).join('\u0002');
+  if (sig === boardTargetsSig) return;
+  boardTargetsSig = sig;
+  const prevNudge = boardNudgeSelectEl.value;
+  boardNudgeSelectEl.innerHTML = '';
+  for (const s of hosted) {
+    const opt = document.createElement('option');
+    opt.value = s.sessionId;
+    opt.textContent = displayTitle(s);
+    boardNudgeSelectEl.appendChild(opt);
+  }
+  boardNudgeSelectEl.value = prevNudge;
+  if (boardNudgeSelectEl.selectedIndex < 0 && hosted.length) boardNudgeSelectEl.selectedIndex = 0;
+  const prevTo = boardToEl.value;
+  boardToEl.innerHTML = '<option value="">to: anyone</option>';
+  for (const s of hosted) {
+    const opt = document.createElement('option');
+    opt.value = s.name || displayTitle(s);
+    opt.textContent = 'to: ' + displayTitle(s);
+    boardToEl.appendChild(opt);
+  }
+  boardToEl.value = prevTo;
+  if (boardToEl.selectedIndex < 0) boardToEl.value = ''; // prior target gone -> "to: anyone"
+}
+
+// Called from render() on every sessions tick: the heavy rail + thread rebuild
+// runs only when the notes or the topic changed (a rebuild every ~1.5s yanked
+// the scroll position and closed open dropdowns); targets are cheap-checked.
+function renderBoardIfChanged() {
+  if (boardNotesVersion + '|' + boardTopic !== boardRenderedKey) renderBoard();
+  else renderBoardTargets();
 }
 
 async function postUserNote() {
@@ -1939,7 +1976,9 @@ function renderChat(entry) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
-async function spawnTerminal({ sessionId, cwd, label, title }) {
+// attach: { id, pid, scrollback } — rebuild a pane for a pty that is already
+// running in main (renderer reloaded after a crash) instead of spawning one.
+async function spawnTerminal({ sessionId, cwd, label, title, attach }) {
   const pane = document.createElement('div');
   pane.className = 'term-pane';
   terminalsEl.appendChild(pane);
@@ -2028,14 +2067,18 @@ async function spawnTerminal({ sessionId, cwd, label, title }) {
   // instead of leaving an orphaned, uncloseable pane behind.
   let ptyId, osPid;
   try {
-    const res = await window.api.startPty({
-      sessionId,
-      cwd,
-      cols: term.cols,
-      rows: term.rows,
-    });
+    const res = attach
+      ? attach
+      : await window.api.startPty({
+          sessionId,
+          cwd,
+          label,
+          cols: term.cols,
+          rows: term.rows,
+        });
     ptyId = res.id;
     osPid = res.pid;
+    if (attach && attach.scrollback) term.write('\x1b[0m' + attach.scrollback);
   } catch (e) {
     const msg = (e && e.message ? e.message : String(e)).replace(/^Error:\s*/, '');
     term.write('\r\n\x1b[31m  Could not start session:\x1b[0m\r\n  ' + msg + '\r\n');
@@ -3544,4 +3587,16 @@ window.addEventListener('unhandledrejection', (e) =>
 
 // Initial load.
 window.api.getSessions().then(update);
+// After a renderer crash + reload, sessions we were hosting are still running
+// in main: rebuild their panes (recent output replayed; focusing a pane sends a
+// resize, which makes claude repaint). Empty on a normal start.
+window.api
+  .listPtys()
+  .then(async (list) => {
+    for (const p of list || []) {
+      await spawnTerminal({ sessionId: p.sessionId, cwd: p.cwd, label: p.label || undefined, attach: p });
+    }
+    if (list && list.length) render();
+  })
+  .catch((e) => console.error('pty reattach failed: ' + ((e && e.stack) || e)));
 refreshBoard(); // bulletin notes + cursors (badges/dot need them before first change event)

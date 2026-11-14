@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const { findTranscript, readCompleteLines } = require('./sessionWatcher');
 
+const INSIGHT_TAIL_BYTES = 32 * 1024 * 1024;
 const KEEP_TOOLS = 40;
 const KEEP_THINK = 6;
 const KEEP_AGENTS = 12;
@@ -110,12 +111,9 @@ function trackPending(id, row) {
   if (pending.size > 300) pending.delete(pending.keys().next().value);
 }
 
+// readCompleteLines hands over text that already ends on a line boundary.
 function foldChunk(text) {
-  const lastNl = text.lastIndexOf('\n');
-  if (lastNl === -1) return 0;
-  const complete = text.slice(0, lastNl + 1);
-  for (const line of complete.split('\n')) if (line) foldLine(line);
-  return Buffer.byteLength(complete, 'utf8');
+  for (const line of text.split('\n')) if (line) foldLine(line);
 }
 
 function snapshot() {
@@ -132,7 +130,7 @@ function onFileChange() {
       if (st.size < current.offset) {
         // shrink (rewrite): rebuild from scratch
         const c = current;
-        openInsight(c.sessionId, c.cwd, c.push);
+        c.push(openInsight(c.sessionId, c.cwd, c.push).state);
         return;
       }
       if (st.size === current.offset) return;
@@ -197,7 +195,16 @@ function openInsight(sessionId, cwd, push) {
     pending: new Map(),
     push,
   };
-  current.offset = readCompleteLines(file, 0, foldChunk);
+  // The pane shows only recent activity (last 40 tools, 6 thoughts, 12 agents,
+  // latest todos), so a cold open reads just the tail: a full parse of a huge
+  // transcript froze the main thread for seconds. Counts are "recent" counts
+  // for such sessions. Starting mid-line is fine — foldLine skips the partial
+  // first line (JSON.parse fails).
+  let start = 0;
+  try {
+    start = Math.max(0, fs.statSync(file).size - INSIGHT_TAIL_BYTES);
+  } catch (_) {}
+  current.offset = readCompleteLines(file, start, foldChunk);
   try {
     current.watcher = fs.watch(file, onFileChange);
     current.watcher.on('error', () => closeInsight());

@@ -119,7 +119,45 @@ function readSessionFiles() {
 // ---------------------------------------------------------------------------
 // Transcript parsing (the authoritative list of sessions), cached by mtime.
 // ---------------------------------------------------------------------------
-const transcriptCache = new Map(); // file -> { mtimeMs, meta }
+const transcriptCache = new Map(); // file -> { mtimeMs, processed, meta }
+let transcriptCacheDirty = false;
+
+// The cache is persisted (userData/transcript-cache.json) so a restart only
+// parses bytes appended since the last run. Cold-parsing every transcript took
+// ~9s of frozen main thread at startup (hundreds of MB of jsonl). BUMP
+// META_VERSION whenever newTranscriptMeta/applyTranscriptLines change what
+// they compute — stale persisted metas are then discarded and re-parsed.
+const META_VERSION = 1;
+
+function loadTranscriptCache(cacheFile) {
+  if (!cacheFile) return;
+  try {
+    const d = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (!d || d.v !== META_VERSION || !d.entries || typeof d.entries !== 'object') return;
+    for (const [file, e] of Object.entries(d.entries)) {
+      if (!e || typeof e.mtimeMs !== 'number' || typeof e.processed !== 'number' || !e.meta) continue;
+      if (!transcriptCache.has(file)) {
+        transcriptCache.set(file, { mtimeMs: e.mtimeMs, processed: e.processed, meta: Object.assign(newTranscriptMeta(), e.meta) });
+      }
+    }
+  } catch (_) {
+    /* missing/corrupt: start cold, it's only a cache */
+  }
+}
+
+function saveTranscriptCache(cacheFile) {
+  if (!cacheFile || !transcriptCacheDirty) return;
+  transcriptCacheDirty = false;
+  try {
+    const entries = {};
+    for (const [file, e] of transcriptCache) entries[file] = e;
+    const tmp = cacheFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ v: META_VERSION, entries }));
+    fs.renameSync(tmp, cacheFile);
+  } catch (_) {
+    transcriptCacheDirty = true; // retry next save
+  }
+}
 
 // Pull the prose out of a message record. Returns '' for tool-only turns so
 // the "most recent message" stays on actual human/assistant text.
@@ -329,6 +367,7 @@ function getTranscriptMeta(file, mtimeMs, size) {
         applyTranscriptLines(cached.meta, text),
       );
       transcriptCache.set(file, { mtimeMs, processed, meta: cached.meta });
+      transcriptCacheDirty = true;
       return cached.meta;
     } catch (_) {
       /* fall through to a full re-parse */
@@ -336,6 +375,7 @@ function getTranscriptMeta(file, mtimeMs, size) {
   }
   const { meta, processed } = parseTranscript(file);
   transcriptCache.set(file, { mtimeMs, processed, meta });
+  transcriptCacheDirty = true;
   return meta;
 }
 
@@ -502,14 +542,28 @@ function projectNameFromCwd(cwd, dirName) {
 
 // ---------------------------------------------------------------------------
 class SessionWatcher extends EventEmitter {
-  constructor({ pollMs = 2000, procMs = 4000 } = {}) {
+  // cacheFile: where the parsed-transcript cache persists between runs.
+  constructor({ pollMs = 2000, procMs = 4000, cacheFile = null } = {}) {
     super();
     this.pollMs = pollMs;
     this.procMs = procMs;
     this.proc = new ProcessTracker();
     this._timer = null;
     this._procTimer = null;
+    this._saveTimer = null;
     this._last = '';
+    this._sessions = null; // latest list() result (served to sessions:get)
+    this.cacheFile = cacheFile;
+    loadTranscriptCache(cacheFile);
+  }
+
+  // The last scanned list, or a fresh one before the first scan.
+  latest() {
+    return this._sessions || this.list();
+  }
+
+  saveCache() {
+    saveTranscriptCache(this.cacheFile);
   }
 
   async start() {
@@ -525,13 +579,18 @@ class SessionWatcher extends EventEmitter {
     if (this._gen !== gen) return this; // a newer start() superseded us mid-await
     this._timer = setInterval(() => this.scan(), this.pollMs);
     this._procTimer = setInterval(() => this.proc.refresh().then(() => this.scan()), this.procMs);
+    this.saveCache(); // persist the cold parse right away
+    this._saveTimer = setInterval(() => this.saveCache(), 30000);
     return this;
   }
 
   stop() {
+    this._gen = (this._gen || 0) + 1; // a start() mid-await must not install timers
     if (this._timer) clearInterval(this._timer);
     if (this._procTimer) clearInterval(this._procTimer);
-    this._timer = this._procTimer = null;
+    if (this._saveTimer) clearInterval(this._saveTimer);
+    this._timer = this._procTimer = this._saveTimer = null;
+    this.saveCache();
   }
 
   list() {
@@ -609,7 +668,10 @@ class SessionWatcher extends EventEmitter {
     // Evict cache entries for transcripts that no longer exist (deleted or
     // rotated) so the cache stays bounded to files actually on disk.
     for (const k of transcriptCache.keys()) {
-      if (!seenFiles.has(k)) transcriptCache.delete(k);
+      if (!seenFiles.has(k)) {
+        transcriptCache.delete(k);
+        transcriptCacheDirty = true;
+      }
     }
 
     // Pure recency: most recently active first, regardless of run state.
@@ -636,7 +698,7 @@ class SessionWatcher extends EventEmitter {
   // the renderer fetches this only while the usage tab is open. Reads the
   // in-memory transcriptCache that list() maintains, so it costs no file IO.
   usageSummary() {
-    this.list(); // ensure the cache reflects the current tick
+    if (!this._sessions) this.list(); // the poll keeps the cache current otherwise
     const cutoff = localDayKey(Date.now() - 30 * 86400000);
     const sessions = [];
     for (const [file, entry] of transcriptCache) {
@@ -658,6 +720,7 @@ class SessionWatcher extends EventEmitter {
 
   async scan() {
     const sessions = this.list();
+    this._sessions = sessions;
     const snapshot = JSON.stringify(sessions);
     if (snapshot !== this._last) {
       this._last = snapshot;

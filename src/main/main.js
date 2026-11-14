@@ -135,7 +135,10 @@ function raiseWindow() {
   mainWindow.focus();
 }
 let rendererCrashes = []; // timestamps of recent renderer crashes (reload-loop guard)
-const watcher = new SessionWatcher({ pollMs: 1500 });
+const watcher = new SessionWatcher({
+  pollMs: 1500,
+  cacheFile: path.join(app.getPath('userData'), 'transcript-cache.json'),
+});
 const ptys = new PtyManager();
 
 // Register the session-update listener ONCE at module scope. (If this lived in
@@ -244,7 +247,7 @@ function createWindow() {
 }
 
 // ---- IPC: sessions ----
-ipcMain.handle('sessions:get', () => watcher.list());
+ipcMain.handle('sessions:get', () => watcher.latest()); // no second full scan
 ipcMain.handle('session:live', (_evt, sessionId) => watcher.isLive(sessionId));
 ipcMain.handle('usage:get', () => watcher.usageSummary());
 // ---- IPC: agent bulletin board (local files, see bulletinStore.js) ----
@@ -355,6 +358,10 @@ ipcMain.handle('pty:start', (_evt, opts) => {
     },
   });
 });
+
+// A reloaded renderer (after a renderer crash) reattaches to the ptys that kept
+// running — without this they'd be invisible, unkillable, and still "live".
+ipcMain.handle('pty:list', () => ptys.list());
 
 ipcMain.on('pty:input', (_evt, p) => {
   if (p && typeof p === 'object') ptys.write(p.id, p.data);

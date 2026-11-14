@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // PTY
   startPty: (opts) => ipcRenderer.invoke('pty:start', opts),
+  listPtys: () => ipcRenderer.invoke('pty:list'),
   sendInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   resizePty: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   killPty: (id) => ipcRenderer.send('pty:kill', id),
