@@ -3599,4 +3599,35 @@ window.api
     if (list && list.length) render();
   })
   .catch((e) => console.error('pty reattach failed: ' + ((e && e.stack) || e)));
+
+// Memory diagnostics -> seshman.log (see diag:mem in main). A baseline a
+// minute after load, then every 10 minutes.
+function reportMem() {
+  try {
+    let live = 0, logViews = 0, chatPanes = 0, chatMsgs = 0;
+    for (const e of terms.values()) {
+      if (e.isLog) logViews++;
+      else if (!e.exited) live++;
+      if (e.chatMode) chatPanes++;
+      if (e.msgs) chatMsgs += e.msgs.length; // kept even after chat is toggled off
+    }
+    const pm = performance.memory || {};
+    window.api.reportMem({
+      jsHeapMB: pm.usedJSHeapSize / 1048576,
+      jsLimitMB: pm.jsHeapSizeLimit / 1048576,
+      domNodes: document.getElementsByTagName('*').length,
+      terms: terms.size,
+      live,
+      logViews,
+      chatPanes,
+      chatMsgs,
+      board: boardMode,
+      grid: gridMode,
+    });
+  } catch (e) {
+    console.error('reportMem failed: ' + e);
+  }
+}
+setTimeout(reportMem, 60 * 1000);
+setInterval(reportMem, 10 * 60 * 1000);
 refreshBoard(); // bulletin notes + cursors (badges/dot need them before first change event)

@@ -94,6 +94,10 @@ class PtyManager {
     }));
   }
 
+  count() {
+    return this._procs.size;
+  }
+
   write(id, data) {
     const entry = this._procs.get(id);
     if (!entry) return;

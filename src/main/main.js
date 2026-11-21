@@ -463,6 +463,36 @@ ipcMain.on('settings:save', (_evt, partial) => {
   }
 });
 
+// ---- Memory diagnostics ----
+// The renderer was OOM-killed after ~7 days with 14 terminals and nothing in
+// the log said what grew. Every 10 min the renderer reports its JS heap and
+// what's open; we add OS-level numbers and log one line, so a future leak
+// shows its growth curve next to what was open at the time.
+ipcMain.on('diag:mem', (evt, s) => {
+  if (!s || typeof s !== 'object') return;
+  const mb = (kb) => Math.round((kb || 0) / 1024);
+  let rend = null;
+  try {
+    const pid = evt.sender.getOSProcessId();
+    rend = app.getAppMetrics().find((m) => m.pid === pid);
+  } catch (_) {
+    /* metrics unavailable */
+  }
+  const num = (v) => (Number.isFinite(v) ? Math.round(v) : '?');
+  const mainHeap = Math.round(process.memoryUsage().heapUsed / 1048576);
+  logLine(
+    'MEM renderer ws=' + (rend ? mb(rend.memory.workingSetSize) : '?') + 'MB' +
+      ' priv=' + (rend ? mb(rend.memory.privateBytes) : '?') + 'MB' +
+      ' jsHeap=' + num(s.jsHeapMB) + '/' + num(s.jsLimitMB) + 'MB' +
+      ' dom=' + num(s.domNodes) +
+      ' | terms=' + num(s.terms) + ' live=' + num(s.live) + ' logViews=' + num(s.logViews) +
+      ' chatPanes=' + num(s.chatPanes) + ' chatMsgs=' + num(s.chatMsgs) +
+      ' board=' + (s.board ? 1 : 0) + ' grid=' + (s.grid ? 1 : 0) +
+      ' | main heap=' + mainHeap + 'MB ptys=' + ptys.count() +
+      ' transcriptWatchers=' + transcriptWatchers.size
+  );
+});
+
 ipcMain.on('transcript:close', (_evt, sessionId) => closeTranscriptWatcher(sessionId));
 // Clicking a desktop notification raises the window.
 ipcMain.on('window:focus', () => raiseWindow());

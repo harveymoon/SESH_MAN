@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('api', {
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_evt, payload) => cb(payload)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_evt, payload) => cb(payload)),
 
+  // Memory diagnostics: renderer-side counts, logged by main to seshman.log
+  reportMem: (stats) => ipcRenderer.send('diag:mem', stats),
+
   // Read-only transcript log
   openTranscript: (opts) => ipcRenderer.invoke('transcript:open', opts),
   closeTranscript: (sessionId) => ipcRenderer.send('transcript:close', sessionId),
