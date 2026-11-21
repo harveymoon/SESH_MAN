@@ -541,7 +541,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// Quit watchdog: if teardown stalls (a native handle wedging shutdown), a
+// windowless seshMan.exe lingers forever and blocks the build script. Force it.
+let quitWatchdog = null;
 app.on('before-quit', () => {
+  if (!quitWatchdog) {
+    logLine('quit requested (' + ptys.count() + ' live pty)');
+    quitWatchdog = setTimeout(() => {
+      logLine('quit stalled >5s — forcing app.exit');
+      app.exit(0);
+    }, 5000);
+  }
   ptys.killAll();
   watcher.stop();
   closeAllTranscriptWatchers();

@@ -2,6 +2,7 @@
 
 const os = require('os');
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -132,8 +133,27 @@ class PtyManager {
     }
   }
 
+  // Shutdown path. On Windows/ConPTY node-pty's kill() is ASYNC: it forks a
+  // helper to list the console's processes and only kills them in a .then().
+  // Called right before app.quit() that .then() never runs — the claude.exe
+  // children survived and the half-torn-down app hung with live ConPTY handles
+  // (window gone, process alive, build script blocked). So kill the process
+  // trees synchronously first, in one taskkill call, then let node-pty clean up.
   killAll() {
-    for (const id of [...this._procs.keys()]) this.kill(id);
+    const ids = [...this._procs.keys()];
+    if (IS_WINDOWS && ids.length) {
+      const pids = ids.map((id) => this._procs.get(id).proc.pid).filter((p) => Number.isInteger(p) && p > 0);
+      if (pids.length) {
+        try {
+          const args = ['/T', '/F'];
+          for (const p of pids) args.push('/PID', String(p));
+          spawnSync('taskkill', args, { windowsHide: true, timeout: 5000, stdio: 'ignore' });
+        } catch (_) {
+          /* best effort; node-pty kill below still runs */
+        }
+      }
+    }
+    for (const id of ids) this.kill(id);
   }
 }
 
